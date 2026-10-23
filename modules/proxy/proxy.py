@@ -230,6 +230,25 @@ def setup(engine, config) -> None:
     section["enabled"] = True
     section.setdefault("sites", {})
     config.set_module_config(MODULE_ID, section)
+    reconcile_others(engine, config)
+
+
+def reconcile_others(engine, config) -> None:
+    """The other modules' reconcile, so the ones with web apps put them behind the proxy at once."""
+    try:
+        from freedomnas.module_loader import ModuleLoader
+    except ImportError:
+        from module_loader import ModuleLoader  # type: ignore[no-redef]
+    for manifest, module in ModuleLoader(engine, config).instances():
+        module_id = manifest.get("id", module.name)
+        if module_id == MODULE_ID:
+            continue
+        try:
+            for result in module.reconcile(config.get_module_config(module_id) or {}, "additive") or []:
+                if result.target_state == "failed":
+                    logger.warning("%s: %s", result.action, result.error)
+        except Exception as exc:
+            logger.warning("Module %s did not reconcile after the proxy setup: %s", module_id, exc)
 
 
 def enabled(config) -> bool:
