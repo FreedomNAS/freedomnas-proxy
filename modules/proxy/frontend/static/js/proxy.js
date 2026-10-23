@@ -1,0 +1,117 @@
+'use strict';
+
+let _status = null;
+let _poll = null;
+
+const OWNERS = { site: 'Added here', app: 'Containers app' };
+
+document.addEventListener('DOMContentLoaded', () => {
+  if (!initShared()) return;
+  document.getElementById('btn-setup').addEventListener('click', setupProxy);
+  document.getElementById('form-site').addEventListener('submit', addSite);
+  document.getElementById('sites-body').addEventListener('click', onSiteAction);
+  loadStatus();
+});
+
+async function loadStatus() {
+  try {
+    _status = await apiJSON('GET', '/api/proxy/status');
+  } catch (e) {
+    document.getElementById('proxy-body').innerHTML =
+      `<tr><td colspan="2" class="text-muted">Could not read the reverse proxy: ${esc(e.message)}</td></tr>`;
+    return;
+  }
+  render();
+  const busy = (_status.job || {}).state === 'running';
+  if (busy && !_poll) _poll = setInterval(loadStatus, 3000);
+  if (!busy && _poll) { clearInterval(_poll); _poll = null; }
+}
+
+function render() {
+  const s = _status;
+  let state;
+  if (!s.installed) state = '<span class="badge badge-muted">Not installed</span>';
+  else if (!s.enabled) state = '<span class="badge badge-warn">Installed, not set up</span>';
+  else if (s.running) state = '<span class="badge badge-ok">Running</span>';
+  else state = '<span class="badge badge-err">Not running</span>';
+  document.getElementById('proxy-body').innerHTML = `
+    <tr><td class="text-muted" style="padding:5px 0;width:140px">State</td><td>${state}</td></tr>
+    <tr><td class="text-muted" style="padding:5px 0">Certificate authority</td>
+        <td class="text-sm" style="word-break:break-all">${esc(s.ca_fingerprint || '—')}</td></tr>`;
+  const job = s.job || {};
+  const line = document.getElementById('job-line');
+  line.hidden = !job.kind || job.state === 'idle';
+  if (job.state === 'running') line.textContent = 'Setting up Caddy…';
+  else if (job.state === 'failed') line.textContent = `Set up failed: ${job.error}`;
+  else if (job.state === 'done') line.textContent = 'Set up finished.';
+  document.getElementById('setup-section').hidden = s.enabled || job.state === 'running';
+  document.getElementById('btn-setup').disabled = job.state === 'running';
+  document.getElementById('sites-section').hidden = !s.enabled;
+  renderSites(s.sites || []);
+}
+
+function renderSites(sites) {
+  const body = document.getElementById('sites-body');
+  if (!sites.length) {
+    body.innerHTML = '<tr><td colspan="5" class="text-muted">No sites yet.</td></tr>';
+    return;
+  }
+  const host = location.hostname;
+  body.innerHTML = sites.map(site => `
+    <tr>
+      <td><a href="https://${esc(host)}:${site.port}/" target="_blank" rel="noopener">${site.port}</a></td>
+      <td>${esc(site.name)}</td>
+      <td class="font-mono text-sm">${esc(site.upstream)}</td>
+      <td class="text-muted">${esc(OWNERS[site.owner] || site.owner)}</td>
+      <td style="text-align:right">${site.owner === 'site'
+        ? `<button class="btn btn-danger btn-sm" data-remove="${esc(site.name)}">Remove</button>` : ''}</td>
+    </tr>`).join('');
+}
+
+async function setupProxy() {
+  const btn = document.getElementById('btn-setup');
+  setLoading(btn, true, 'Setting up…');
+  try {
+    await apiJSON('POST', '/api/proxy/setup');
+  } catch (e) {
+    toast(`Error: ${e.message}`, 'err');
+  }
+  setLoading(btn, false);
+  loadStatus();
+}
+
+async function addSite(e) {
+  e.preventDefault();
+  const btn = document.getElementById('btn-site-add');
+  const body = {
+    name: document.getElementById('f-site-name').value.trim(),
+    port: Number(document.getElementById('f-site-port').value),
+    upstream: document.getElementById('f-site-upstream').value.trim(),
+  };
+  setLoading(btn, true, 'Adding…');
+  try {
+    await apiJSON('POST', '/api/proxy/sites', body);
+    toast(`Site ${body.name} added on port ${body.port}.`, 'ok');
+    document.getElementById('form-site').reset();
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'err');
+  }
+  setLoading(btn, false);
+  loadStatus();
+}
+
+async function onSiteAction(e) {
+  const btn = e.target.closest('[data-remove]');
+  if (!btn) return;
+  const name = btn.dataset.remove;
+  if (!await confirm('Remove site', `Remove the site ${name}? Its port stops answering.`, 'Remove')) return;
+  setLoading(btn, true, '…');
+  try {
+    await apiJSON('DELETE', `/api/proxy/sites/${encodeURIComponent(name)}`);
+    toast(`Site ${name} removed.`, 'ok');
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'err');
+    setLoading(btn, false);
+  }
+  loadStatus();
+}

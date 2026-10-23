@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Reverse proxy{% endblock %}
+{% block page_title %}Reverse proxy{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-header-text">
+    <h1>Reverse proxy</h1>
+    <p>Caddy in front of your web apps: each keeps its own port, served over HTTPS with FreedomNAS's certificate</p>
+  </div>
+</div>
+
+<div class="section">
+  <div class="card">
+    <div class="card-title" style="margin-bottom:10px">Caddy</div>
+    <table style="width:100%;font-size:0.875rem">
+      <tbody id="proxy-body">
+        <tr><td colspan="2" class="text-muted">Loading…</td></tr>
+      </tbody>
+    </table>
+    <p class="form-hint" id="job-line" hidden></p>
+  </div>
+</div>
+
+<div class="section" id="setup-section" hidden>
+  <div class="card">
+    <div class="card-title" style="margin-bottom:10px">Set up the reverse proxy</div>
+    <p class="text-muted">
+      Caddy is installed from your edition's own packages if it is not there yet, and FreedomNAS takes over its
+      configuration (the one it came with is kept beside it). The apps of the Containers catalogue then come in behind
+      it by themselves; other services can be added below.
+    </p>
+    <button class="btn btn-primary" id="btn-setup">Set up</button>
+  </div>
+</div>
+
+<div class="section" id="sites-section" hidden>
+  <div class="card">
+    <div class="d-flex items-center" style="justify-content:space-between;margin-bottom:10px">
+      <div class="card-title">Sites</div>
+    </div>
+    <p class="text-muted" style="margin-top:0">
+      Each site answers over HTTPS on its port of the NAS and passes the requests to the service behind it.
+      Install FreedomNAS's certificate authority once on each device (System → Certificate) and none of them warns.
+    </p>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Port</th><th>Name</th><th>Service behind it</th><th>From</th><th></th></tr></thead>
+        <tbody id="sites-body"></tbody>
+      </table>
+    </div>
+    <form id="form-site" class="d-flex gap-3 items-end" style="margin-top:14px;flex-wrap:wrap">
+      <div class="form-group" style="margin:0">
+        <label for="f-site-name">Name</label>
+        <input id="f-site-name" class="input" required placeholder="printer" style="max-width:160px">
+      </div>
+      <div class="form-group" style="margin:0">
+        <label for="f-site-port">Port on the NAS</label>
+        <input id="f-site-port" class="input" type="number" min="1" max="65535" required placeholder="8443" style="max-width:120px">
+      </div>
+      <div class="form-group" style="margin:0">
+        <label for="f-site-upstream">Service (host:port)</label>
+        <input id="f-site-upstream" class="input" required placeholder="192.168.1.50:80" style="max-width:220px">
+      </div>
+      <button type="submit" class="btn btn-primary" id="btn-site-add">Add</button>
+    </form>
+    <span class="form-hint" style="display:block;margin-top:8px">
+      The service is reached over plain HTTP, so keep it on the NAS or on your own network.
+    </span>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/modules/proxy/js/proxy.js"></script>
+{% endblock %}

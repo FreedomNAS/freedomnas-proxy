@@ -1,0 +1,30 @@
+{
+  "id": "proxy",
+  "name": "Reverse proxy",
+  "version": "0.1.0",
+  "type": "community",
+  "description": "Caddy in front of the NAS's web apps, serving each over HTTPS with FreedomNAS's certificate on its own port",
+  "entry_point": "module:ProxyModule",
+  "supported_os": [
+    "debian",
+    "arch",
+    "void",
+    "gentoo",
+    "freebsd"
+  ],
+  "depends_on": [],
+  "webui": {
+    "api_routes": "api_routes.py",
+    "route_prefix": "/api/proxy",
+    "router_attr": "router",
+    "templates_dir": "frontend/templates",
+    "static_dir": "frontend/static",
+    "page_route": "/proxy/",
+    "page_template": "proxy.html",
+    "nav": {
+      "label": "Reverse proxy",
+      "icon": "icons.svg#proxy",
+      "level": "advanced"
+    }
+  }
+}

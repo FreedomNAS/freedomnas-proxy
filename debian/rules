@@ -1,0 +1,11 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_install:
+	dh_install
+	mkdir -p debian/freedomnas-module-proxy/usr/lib/freedomnas/modules
+	mkdir -p debian/freedomnas-module-proxy/usr/lib/freedomnas/profiles
+	cp -r modules/proxy  debian/freedomnas-module-proxy/usr/lib/freedomnas/modules/proxy
+	cp -r profiles/proxy debian/freedomnas-module-proxy/usr/lib/freedomnas/profiles/proxy
