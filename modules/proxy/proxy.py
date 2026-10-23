@@ -73,7 +73,8 @@ def installed(engine) -> bool:
 
 
 def install(engine) -> None:
-    for name in value(engine, "packages", []):
+    init = (value(engine, "init_packages", {}) or {}).get(getattr(engine, "init_system", ""), [])
+    for name in [*value(engine, "packages", []), *init]:
         engine.execute("packages", "install", timeout=7200, package_name=name)
 
 

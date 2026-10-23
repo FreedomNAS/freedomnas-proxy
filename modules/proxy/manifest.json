@@ -8,6 +8,7 @@
   "supported_os": [
     "debian",
     "arch",
+    "artix",
     "void",
     "gentoo",
     "freebsd"

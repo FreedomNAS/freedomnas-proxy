@@ -6,8 +6,11 @@ port, with FreedomNAS's own certificate (the one its certificate authority
 signs for the NAS's hostname and addresses). Install that authority once on
 a device and no app warns any more.
 
-Package: `freedomnas-module-proxy`. Editions: Debian, Arch, Void, Gentoo,
-FreeBSD (Artix has no Caddy package yet).
+Package: `freedomnas-module-proxy`. Editions: Debian, Arch, Artix, Void,
+Gentoo, FreeBSD. Caddy comes from the edition's own packages; Artix packages
+none, so it comes from FreedomNAS's `freedomnas-arch` repository: `caddy-bin`
+(upstream's static build) and the service of the running init
+(`caddy-openrc`, `caddy-dinit`, `caddy-runit`; profile `init_packages`).
 
 ## How it works
 

@@ -40,7 +40,8 @@ class FakeEngine:
     recorded; `failing` makes one raise.
     """
 
-    def __init__(self, tmp: Path, edition: str = "debian"):
+    def __init__(self, tmp: Path, edition: str = "debian", init_system: str = "systemd"):
+        self.init_system = init_system
         section = json.loads((REPO / f"profiles/proxy/proxy-{edition}.json").read_text())["proxy"]
         section["tls_dir"] = str(tmp / "caddy-tls")
         section["group"] = grp.getgrgid(os.getgid()).gr_name
@@ -113,6 +114,11 @@ def certificate(tmp_path, monkeypatch):
 @pytest.fixture
 def engine(tmp_path, certificate):
     return FakeEngine(tmp_path)
+
+
+@pytest.fixture
+def artix(tmp_path, certificate):
+    return FakeEngine(tmp_path, "artix", "dinit")
 
 
 @pytest.fixture

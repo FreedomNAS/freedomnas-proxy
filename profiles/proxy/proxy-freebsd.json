@@ -25,6 +25,7 @@
     "main_template": "{{\n\tadmin localhost:2019\n\tauto_https disable_redirects\n\tdefault_sni {hostname}\n}}\n\n(freedomnas_tls) {{\n\ttls {tls_dir}/cert.pem {tls_dir}/key.pem\n}}\n\nimport {sites_dir}/*.caddy\n",
     "site_template": "# freedomnas-site {owner} {name} {port} {upstream}\n:{port} {{\n\timport freedomnas_tls\n\treverse_proxy {upstream}\n}}\n",
     "listening": "sockstat -46lq -P tcp | awk '{{print $6}}'",
-    "service_configure": "sysrc caddy_user=www caddy_group=www"
+    "service_configure": "sysrc caddy_user=www caddy_group=www",
+    "init_packages": {}
   }
 }

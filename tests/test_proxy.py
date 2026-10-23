@@ -184,3 +184,10 @@ def test_a_copy_with_another_group_is_made_again(engine, config, monkeypatch):
     monkeypatch.setattr(proxy.grp, "getgrnam", lambda name: type("G", (), {"gr_gid": 4242})())
     proxy.reconcile(engine, config.get_module_config("proxy"))
     assert "tls_copy" in engine.actions()
+
+
+def test_artix_installs_caddy_with_the_service_of_its_init(artix, config):
+    artix.installed = False
+    proxy.setup(artix, config)
+    assert [kw["package_name"] for c, a, kw in artix.calls if (c, a) == ("packages", "install")] == [
+        "caddy-bin", "caddy-dinit"]
