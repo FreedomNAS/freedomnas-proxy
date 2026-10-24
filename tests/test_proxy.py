@@ -300,3 +300,13 @@ def test_every_edition_formats_the_name_templates(engine):
         assert site.rstrip().endswith(f"import {d['names_dir']}/*.caddy web 127.0.0.1:9"), f.name
         assert ".nas.home.arpa {" in d["names_template"].format(domain="nas.home.arpa"), f.name
         assert "http://*.nas.home.arpa" in d["redirect_template"].format(domain="nas.home.arpa"), f.name
+
+
+def test_gentoo_accepts_the_caddy_that_works_before_installing_it(tmp_path, certificate, config):
+    from conftest import FakeEngine
+    gentoo = FakeEngine(tmp_path, "gentoo", "openrc")
+    gentoo.installed = False
+    proxy.setup(gentoo, config)
+    actions = gentoo.actions()
+    assert actions.index("install_prepare") < actions.index("install")
+    assert [kw["package_name"] for c, a, kw in gentoo.calls if a == "install"] == [">=www-servers/caddy-2.11"]
