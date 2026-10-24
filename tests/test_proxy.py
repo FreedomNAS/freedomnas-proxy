@@ -89,6 +89,13 @@ def test_a_port_in_use_is_refused(engine, config):
         proxy.add_site(engine, config, "web", 8080, "127.0.0.1:9000")
 
 
+def test_a_port_a_firewall_redirects_is_refused(engine, config):
+    set_up(engine, config)
+    engine.listening = "*:22\npf:8222\npf:53\n"
+    with pytest.raises(proxy.ProxyError, match="in use"):
+        proxy.add_site(engine, config, "web", 8222, "127.0.0.1:9000")
+
+
 def test_a_port_another_site_has_is_refused_but_editing_keeps_it(engine, config):
     set_up(engine, config)
     proxy.add_site(engine, config, "printer", 8443, "192.168.1.50:80")

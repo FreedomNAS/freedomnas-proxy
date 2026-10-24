@@ -1,6 +1,6 @@
 {
   "proxy": {
-    "_note": "Caddy for the reverse proxy module. config_file is Caddy's own configuration, written whole from main_template (the distribution's is kept as <file>.pre-freedomnas); tls_dir holds a copy of FreedomNAS's certificate and key readable by group, the group Caddy runs as; sites_dir one file per site from site_template, whose first line (# freedomnas-site owner name port upstream) is what sites_list reads. Templates are str.format strings: literal braces doubled. reload talks to Caddy's admin endpoint (admin in main_template). FreeBSD: the port's rc script starts Caddy with su -m <caddy_user>, which a locked root refuses, so service_configure runs it as www (ports above 1024 need no privilege).",
+    "_note": "Caddy for the reverse proxy module. config_file is Caddy's own configuration, written whole from main_template (the distribution's is kept as <file>.pre-freedomnas); tls_dir holds a copy of FreedomNAS's certificate and key readable by group, the group Caddy runs as; sites_dir one file per site from site_template, whose first line (# freedomnas-site owner name port upstream) is what sites_list reads. Templates are str.format strings: literal braces doubled. reload talks to Caddy's admin endpoint (admin in main_template). FreeBSD: the port's rc script starts Caddy with su -m <caddy_user>, which a locked root refuses, so service_configure runs it as www (ports above 1024 need no privilege). listening also prints the TCP ports pf redirects (the jails' exposed ports, which no host socket shows), as pf:<port>; service names resolved through /etc/services.",
     "packages": [
       "caddy"
     ],
@@ -24,7 +24,7 @@
     "reload": "caddy reload --config {file} --adapter caddyfile --force",
     "main_template": "{{\n\tadmin localhost:2019\n\tauto_https disable_redirects\n\tdefault_sni {hostname}\n}}\n\n(freedomnas_tls) {{\n\ttls {tls_dir}/cert.pem {tls_dir}/key.pem\n}}\n\nimport {sites_dir}/*.caddy\n",
     "site_template": "# freedomnas-site {owner} {name} {port} {upstream}\n:{port} {{\n\timport freedomnas_tls\n\treverse_proxy {upstream}\n}}\n",
-    "listening": "sockstat -46lq -P tcp | awk '{{print $6}}'",
+    "listening": "sockstat -46lq -P tcp | awk '{{print $6}}'; pfctl -a '*' -sn 2>/dev/null | awk 'NR==FNR {{ split($2, a, \"/\"); if (a[2] == \"tcp\") s[$1] = a[1]; next }} /^ *rdr / && / proto tcp / {{ for (i = 1; i < NF; i++) if ($i == \"port\" && $(i+1) == \"=\") {{ p = $(i+2); if (p !~ /^[0-9]+$/) p = s[p]; if (p != \"\") print \"pf:\" p; break }} }}' /etc/services -",
     "service_configure": "sysrc caddy_user=www caddy_group=www",
     "init_packages": {}
   }
