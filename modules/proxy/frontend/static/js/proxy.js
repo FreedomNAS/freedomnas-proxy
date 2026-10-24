@@ -52,8 +52,10 @@ function render() {
     <tr><td class="text-muted" style="padding:5px 0">Certificate authority</td>
         <td class="text-sm" style="word-break:break-all">${esc(s.ca_fingerprint || '—')}</td></tr>`;
   const job = s.job || {};
-  const line = document.getElementById('job-line');
-  line.hidden = !job.kind || job.state === 'idle';
+  const certificate = job.kind === 'certificate';
+  const line = document.getElementById(certificate ? 'acme-job-line' : 'job-line');
+  document.getElementById(certificate ? 'job-line' : 'acme-job-line').hidden = true;
+  line.hidden = !job.kind || job.state === 'idle' || (certificate && !s.acme && job.state === 'done');
   const words = JOBS[job.kind] || JOBS.setup;
   if (job.state === 'running') line.textContent = words.running;
   else if (job.state === 'failed') line.textContent = `${words.failed}: ${job.error}`;
