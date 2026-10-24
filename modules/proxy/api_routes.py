@@ -5,6 +5,8 @@ GET    /status        — Caddy installed and running, set up, every site (which
                         module wrote it) and FreedomNAS's CA fingerprint, and the job
 POST   /setup         — install Caddy if needed, take over its configuration with
                         FreedomNAS's certificate and start it at boot (a job)
+POST   /disable       — stop Caddy, keep it off at boot and put the apps behind it
+                        back on their own ports (a job)
 POST   /sites         — {name, port, upstream}: serve upstream over HTTPS on port
 DELETE /sites/{name}  — remove a site added by hand
 """
@@ -89,6 +91,14 @@ async def status(username: str = Depends(authenticate)):
 async def setup(username: str = Depends(authenticate)):
     engine, config = get_engine(), get_config()
     return _start_job("setup", lambda: proxy.setup(engine, config))
+
+
+@router.post("/disable")
+async def disable(username: str = Depends(authenticate)):
+    engine, config = get_engine(), get_config()
+    if not proxy.enabled(config):
+        return JSONResponse(status_code=422, content={"detail": "The reverse proxy is not set up"})
+    return _start_job("disable", lambda: proxy.disable(engine, config))
 
 
 @router.post("/sites")

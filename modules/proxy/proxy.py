@@ -234,12 +234,16 @@ def setup(engine, config) -> None:
     reconcile_others(engine, config)
 
 
-def reconcile_others(engine, config) -> None:
-    """The other modules' reconcile, so the ones with web apps put them behind the proxy at once."""
+def reconcile_others(engine, config) -> List[str]:
+    """
+    The other modules' reconcile, so the ones with web apps move behind the
+    proxy (or back on their own ports) at once; what failed, one line each.
+    """
     try:
         from freedomnas.module_loader import ModuleLoader
     except ImportError:
         from module_loader import ModuleLoader  # type: ignore[no-redef]
+    failures = []
     for manifest, module in ModuleLoader(engine, config).instances():
         module_id = manifest.get("id", module.name)
         if module_id == MODULE_ID:
@@ -248,8 +252,30 @@ def reconcile_others(engine, config) -> None:
             for result in module.reconcile(config.get_module_config(module_id) or {}, "additive") or []:
                 if result.target_state == "failed":
                     logger.warning("%s: %s", result.action, result.error)
+                    failures.append(f"{result.action}: {result.error}")
         except Exception as exc:
-            logger.warning("Module %s did not reconcile after the proxy setup: %s", module_id, exc)
+            logger.warning("Module %s did not reconcile after the proxy change: %s", module_id, exc)
+            failures.append(f"{module_id}: {exc}")
+    return failures
+
+
+def disable(engine, config) -> None:
+    """
+    Stop Caddy and keep it off at boot, then let the apps behind it go back
+    to their own ports. Caddy stays installed and the sites added by hand
+    stay in the configuration, so setting it up again brings them back.
+    """
+    if not enabled(config):
+        raise ProxyError("The reverse proxy is not set up")
+    for name in services(engine):
+        engine.execute("services", "stop", service_name=name)
+        engine.execute("services", "disable", service_name=name)
+    section = _section(config)
+    section["enabled"] = False
+    config.set_module_config(MODULE_ID, section)
+    failures = reconcile_others(engine, config)
+    if failures:
+        raise ProxyError("Caddy is off, but some apps did not come back on their own port: " + "; ".join(failures))
 
 
 def enabled(config) -> bool:

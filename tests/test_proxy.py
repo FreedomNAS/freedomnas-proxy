@@ -191,3 +191,43 @@ def test_artix_installs_caddy_with_the_service_of_its_init(artix, config):
     proxy.setup(artix, config)
     assert [kw["package_name"] for c, a, kw in artix.calls if (c, a) == ("packages", "install")] == [
         "caddy-bin", "caddy-dinit"]
+
+
+def test_disable_stops_caddy_first_then_brings_the_apps_back(engine, config, monkeypatch):
+    set_up(engine, config)
+    proxy.add_site(engine, config, "printer", 8443, "192.168.1.50:80")
+    engine.calls.clear()
+    seen = []
+    monkeypatch.setattr(proxy, "reconcile_others",
+                        lambda e, c: seen.append((e.actions(), c.get_module_config("proxy"))) or [])
+    proxy.disable(engine, config)
+    actions, section = seen[0]
+    assert actions == ["stop", "disable"]
+    assert section == {"enabled": False, "sites": {"printer": {"port": 8443, "upstream": "192.168.1.50:80"}}}
+    assert proxy.reconcile(engine, config.get_module_config("proxy")) == []
+
+
+def test_disable_says_which_apps_did_not_come_back(engine, config, monkeypatch):
+    set_up(engine, config)
+    monkeypatch.setattr(proxy, "reconcile_others", lambda e, c: ["containers.jellyfin.proxy: port 8096 in use"])
+    with pytest.raises(proxy.ProxyError, match="jellyfin"):
+        proxy.disable(engine, config)
+    assert not proxy.enabled(config)
+
+
+def test_disable_before_setup_is_refused(engine, config):
+    with pytest.raises(proxy.ProxyError, match="not set up"):
+        proxy.disable(engine, config)
+    assert engine.calls == []
+
+
+def test_setup_after_disable_turns_caddy_back_on_with_the_sites(engine, config, monkeypatch):
+    set_up(engine, config)
+    proxy.add_site(engine, config, "printer", 8443, "192.168.1.50:80")
+    monkeypatch.setattr(proxy, "reconcile_others", lambda e, c: [])
+    proxy.disable(engine, config)
+    engine.calls.clear()
+    proxy.setup(engine, config)
+    assert ["enable", "restart"] == [a for a in engine.actions("services") if a in ("enable", "restart")]
+    assert config.get_module_config("proxy")["sites"] == {"printer": {"port": 8443, "upstream": "192.168.1.50:80"}}
+    assert f"{SITES}/site-printer.caddy" in engine.files

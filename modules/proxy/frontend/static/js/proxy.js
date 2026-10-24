@@ -4,10 +4,15 @@ let _status = null;
 let _poll = null;
 
 const OWNERS = { site: 'Added here', app: 'Containers app' };
+const JOBS = {
+  setup: { running: 'Setting up Caddy…', failed: 'Set up failed', done: 'Set up finished.' },
+  disable: { running: 'Turning the reverse proxy off…', failed: 'Turning off failed', done: 'The reverse proxy is off.' },
+};
 
 document.addEventListener('DOMContentLoaded', () => {
   if (!initShared()) return;
   document.getElementById('btn-setup').addEventListener('click', setupProxy);
+  document.getElementById('btn-disable').addEventListener('click', disableProxy);
   document.getElementById('form-site').addEventListener('submit', addSite);
   document.getElementById('sites-body').addEventListener('click', onSiteAction);
   loadStatus();
@@ -31,7 +36,7 @@ function render() {
   const s = _status;
   let state;
   if (!s.installed) state = '<span class="badge badge-muted">Not installed</span>';
-  else if (!s.enabled) state = '<span class="badge badge-warn">Installed, not set up</span>';
+  else if (!s.enabled) state = '<span class="badge badge-warn">Installed, off</span>';
   else if (s.running) state = '<span class="badge badge-ok">Running</span>';
   else state = '<span class="badge badge-err">Not running</span>';
   document.getElementById('proxy-body').innerHTML = `
@@ -41,11 +46,13 @@ function render() {
   const job = s.job || {};
   const line = document.getElementById('job-line');
   line.hidden = !job.kind || job.state === 'idle';
-  if (job.state === 'running') line.textContent = 'Setting up Caddy…';
-  else if (job.state === 'failed') line.textContent = `Set up failed: ${job.error}`;
-  else if (job.state === 'done') line.textContent = 'Set up finished.';
+  const words = JOBS[job.kind] || JOBS.setup;
+  if (job.state === 'running') line.textContent = words.running;
+  else if (job.state === 'failed') line.textContent = `${words.failed}: ${job.error}`;
+  else if (job.state === 'done') line.textContent = words.done;
   document.getElementById('setup-section').hidden = s.enabled || job.state === 'running';
   document.getElementById('btn-setup').disabled = job.state === 'running';
+  document.getElementById('disable-row').hidden = !s.enabled || job.state === 'running';
   document.getElementById('sites-section').hidden = !s.enabled;
   renderSites(s.sites || []);
 }
@@ -73,6 +80,21 @@ async function setupProxy() {
   setLoading(btn, true, 'Setting up…');
   try {
     await apiJSON('POST', '/api/proxy/setup');
+  } catch (e) {
+    toast(`Error: ${e.message}`, 'err');
+  }
+  setLoading(btn, false);
+  loadStatus();
+}
+
+async function disableProxy() {
+  if (!await confirm('Turn off the reverse proxy',
+    'Caddy stops and stays off at boot. The apps behind it go back to their own ports over plain HTTP, ' +
+    'and the sites added here stop answering until you set the proxy up again.', 'Turn off')) return;
+  const btn = document.getElementById('btn-disable');
+  setLoading(btn, true, 'Turning off…');
+  try {
+    await apiJSON('POST', '/api/proxy/disable');
   } catch (e) {
     toast(`Error: ${e.message}`, 'err');
   }
