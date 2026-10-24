@@ -9,6 +9,7 @@ POST   /disable       — stop Caddy, keep it off at boot and put the apps behin
                         back on their own ports (a job)
 POST   /sites         — {name, port, upstream}: serve upstream over HTTPS on port
 DELETE /sites/{name}  — remove a site added by hand
+POST   /names         — {enabled}: serve every site by name too, https://<name>.<hostname>.home.arpa
 """
 
 import asyncio
@@ -105,6 +106,11 @@ async def disable(username: str = Depends(authenticate)):
 async def add_site(body: dict, username: str = Depends(authenticate)):
     return await _call(proxy.add_site, get_engine(), get_config(),
                        str(body.get("name") or "").strip(), body.get("port"), str(body.get("upstream") or ""))
+
+
+@router.post("/names")
+async def names(body: dict, username: str = Depends(authenticate)):
+    return await _call(proxy.set_names, get_engine(), get_config(), bool(body.get("enabled")))
 
 
 @router.delete("/sites/{name}")

@@ -13,6 +13,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (!initShared()) return;
   document.getElementById('btn-setup').addEventListener('click', setupProxy);
   document.getElementById('btn-disable').addEventListener('click', disableProxy);
+  document.getElementById('btn-names').addEventListener('click', toggleNames);
   document.getElementById('form-site').addEventListener('submit', addSite);
   document.getElementById('sites-body').addEventListener('click', onSiteAction);
   loadStatus();
@@ -54,7 +55,45 @@ function render() {
   document.getElementById('btn-setup').disabled = job.state === 'running';
   document.getElementById('disable-row').hidden = !s.enabled || job.state === 'running';
   document.getElementById('sites-section').hidden = !s.enabled;
+  renderNames(s);
   renderSites(s.sites || []);
+}
+
+function renderNames(s) {
+  const names = s.names || {};
+  const section = document.getElementById('names-section');
+  section.hidden = !s.enabled;
+  if (!s.enabled) return;
+  const first = (s.sites || [])[0];
+  document.getElementById('names-example').textContent = `https://${first ? first.name : 'jellyfin'}.${names.domain}/`;
+  const state = names.enabled
+    ? '<span class="badge badge-ok">On</span>' : '<span class="badge badge-muted">Off</span>';
+  document.getElementById('names-body').innerHTML = `
+    <tr><td class="text-muted" style="padding:5px 0;width:140px">State</td><td>${state}</td></tr>
+    <tr><td class="text-muted" style="padding:5px 0">Domain</td><td class="font-mono text-sm">${esc(names.domain || '')}</td></tr>`;
+  const btn = document.getElementById('btn-names');
+  btn.textContent = names.enabled ? 'Stop serving by name' : 'Serve the sites by name';
+  btn.className = names.enabled ? 'btn btn-danger btn-sm' : 'btn btn-primary btn-sm';
+  const dns = document.getElementById('names-dns');
+  dns.hidden = !names.enabled;
+  dns.innerHTML = `Your devices find these names through your DNS: point every name under
+    <span class="font-mono">${esc(names.domain || '')}</span> (a wildcard record
+    <span class="font-mono">*.${esc(names.domain || '')}</span>) at this NAS's address on your network${
+    names.address ? `, <span class="font-mono">${esc(names.address)}</span>` : ''}, in your router or in Pi-hole.`;
+}
+
+async function toggleNames() {
+  const on = !((_status.names || {}).enabled);
+  const btn = document.getElementById('btn-names');
+  setLoading(btn, true, on ? 'Turning on…' : 'Turning off…');
+  try {
+    await apiJSON('POST', '/api/proxy/names', { enabled: on });
+    toast(on ? 'The sites now answer by name too.' : 'The sites answer on their ports only.', 'ok');
+  } catch (e) {
+    toast(`Error: ${e.message}`, 'err');
+  }
+  setLoading(btn, false);
+  loadStatus();
 }
 
 function renderSites(sites) {
@@ -64,10 +103,13 @@ function renderSites(sites) {
     return;
   }
   const host = location.hostname;
+  const names = (_status && _status.names) || {};
   body.innerHTML = sites.map(site => `
     <tr>
       <td><a href="https://${esc(host)}:${site.port}/" target="_blank" rel="noopener">${site.port}</a></td>
-      <td>${esc(site.name)}</td>
+      <td>${names.enabled
+        ? `<a href="https://${esc(site.name)}.${esc(names.domain)}/" target="_blank" rel="noopener">${esc(site.name)}</a>`
+        : esc(site.name)}</td>
       <td class="font-mono text-sm">${esc(site.upstream)}</td>
       <td class="text-muted">${esc(OWNERS[site.owner] || site.owner)}</td>
       <td style="text-align:right">${site.owner === 'site'

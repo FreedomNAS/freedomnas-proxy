@@ -18,7 +18,15 @@ A site listens on a port of the NAS, for every name and address, and passes
 the requests on to an upstream (host:port) over plain HTTP: the app behind it
 keeps its own port, moved where only the proxy reaches it.
 
-Configuration (modules.proxy): {"enabled": bool, "sites": {name: {"port", "upstream"}}}.
+With names on, every site also answers as https://<name>.<hostname>.home.arpa
+on port 443 (FreedomNAS's certificate names *.<hostname>.home.arpa), and
+http:// on port 80 sends there. Each site file imports names_dir/*.caddy with
+its name and upstream; names_dir holds the one names_template file while names
+are on and nothing while they are off, so the sites are the same files either
+way and no other module needs to know about names.
+
+Configuration (modules.proxy): {"enabled": bool, "names": bool,
+"sites": {name: {"port", "upstream"}}}.
 """
 
 from __future__ import annotations
@@ -128,6 +136,10 @@ def check_upstream(upstream: str) -> str:
     return text
 
 
+def domain(hostname: Optional[str] = None) -> str:
+    return tls.local_domain(hostname or _hostname())
+
+
 def main_text(engine, hostname: Optional[str] = None) -> str:
     return value(engine, "main_template").format(
         hostname=hostname or _hostname(), tls_dir=value(engine, "tls_dir"), sites_dir=value(engine, "sites_dir"))
@@ -182,13 +194,53 @@ def _tls_current(engine) -> bool:
         return False
 
 
-def prepare(engine) -> bool:
+def names_file(engine) -> str:
+    return f"{value(engine, 'names_dir')}/name.caddy"
+
+
+def redirect_file(engine) -> str:
+    return f"{value(engine, 'sites_dir')}/names.caddy"
+
+
+def _put(engine, file: str, text: Optional[str]) -> bool:
+    """The file with this text, or no file for None; True if it changed."""
+    current, _ = engine.execute(CATEGORY, "file_read", check=False, file=file)
+    if text is None:
+        if not current:
+            return False
+        engine.execute(CATEGORY, "file_remove", file=file)
+        return True
+    if current.rstrip() == text.rstrip():
+        return False
+    engine.execute_with_stdin(CATEGORY, "file_write", text, file=file)
+    return True
+
+
+def prepare_names(engine, on: bool) -> bool:
+    """
+    The names' files, and what lets Caddy open ports 443 and 80
+    (names_configure, every time names are on; names_unconfigure once,
+    when they go off).
+    """
+    name = domain()
+    current, _ = engine.execute(CATEGORY, "file_read", check=False, file=names_file(engine))
+    if on:
+        engine.execute(CATEGORY, "names_configure")
+    changed = _put(engine, names_file(engine), value(engine, "names_template").format(domain=name) if on else None)
+    redirect = value(engine, "redirect_template").format(domain=name) if on else None
+    changed = _put(engine, redirect_file(engine), redirect) or changed
+    if not on and current:
+        engine.execute(CATEGORY, "names_unconfigure")
+    return changed
+
+
+def prepare(engine, names: bool = False) -> bool:
     """The directories, the copy of the certificate and Caddy's configuration; True if any changed."""
     group = value(engine, "group")
     engine.execute(CATEGORY, "service_configure")
-    for key in ("tls_dir", "sites_dir"):
+    for key in ("tls_dir", "sites_dir", "names_dir"):
         engine.execute(CATEGORY, "dir_prepare", group=group, path=value(engine, key))
-    changed = False
+    changed = prepare_names(engine, names)
     if not _tls_current(engine):
         engine.execute(CATEGORY, "tls_copy", group=group, path=value(engine, "tls_dir"),
                        cert=str(tls.cert_file()), key=str(tls.key_file()))
@@ -222,7 +274,7 @@ def setup(engine, config) -> None:
     """Install Caddy if needed, take over its configuration and start it at boot."""
     if not installed(engine):
         install(engine)
-    prepare(engine)
+    prepare(engine, bool(_section(config).get("names")))
     engine.execute(CATEGORY, "validate", file=value(engine, "config_file"))
     for name in services(engine):
         engine.execute("services", "enable", service_name=name)
@@ -289,7 +341,13 @@ def add_site(engine, config, name: str, port: Any, upstream: str) -> Dict[str, A
     name, port, upstream = check_name(name), check_port(port), check_upstream(upstream)
     section = _section(config)
     manual = dict(section.get("sites") or {})
-    taken = {s["port"]: s for s in sites(engine) if not (s["owner"] == OWNER and s["name"] == name)}
+    others = [s for s in sites(engine) if not (s["owner"] == OWNER and s["name"] == name)]
+    clash = next((s for s in others if s["name"] == name), None)
+    if clash:
+        raise ProxyError(f"The name '{name}' is already the site of a {clash['owner']}: choose another one")
+    if _section(config).get("names") and port in NAME_PORTS:
+        raise ProxyError(f"Port {port} serves the sites by name: choose another one")
+    taken = {s["port"]: s for s in others}
     if port in taken:
         other = taken[port]
         raise ProxyError(f"Port {port} is already the site '{other['name']}' ({other['owner']})")
@@ -331,6 +389,49 @@ def remove_site(engine, config, name: str) -> None:
     config.set_module_config(MODULE_ID, section)
 
 
+NAME_PORTS = (443, 80)
+
+
+def set_names(engine, config, on: bool) -> Dict[str, Any]:
+    """
+    Serve every site by name too (https://<name>.<hostname>.home.arpa), or
+    stop. The sites' files are written again first (here and by the other
+    modules), so every one of them imports the names.
+    """
+    if not enabled(config):
+        raise ProxyError("Set up the reverse proxy first")
+    section = _section(config)
+    was = bool(section.get("names"))
+    if on and not was:
+        busy = [p for p in NAME_PORTS if p in listening_ports(engine)]
+        if busy:
+            raise ProxyError(f"Port {' and '.join(map(str, busy))} is in use on the NAS: names need 443 and 80")
+    section["names"] = on
+    failed = [r.error for r in reconcile(engine, section, "additive") if r.target_state == "failed"]
+    if failed:
+        section["names"] = was
+        reconcile(engine, section, "additive")
+        raise ProxyError(f"Caddy refused the names: {failed[0]}")
+    config.set_module_config(MODULE_ID, section)
+    for failure in reconcile_others(engine, config):
+        logger.warning("After turning names %s: %s", "on" if on else "off", failure)
+    return names_status(engine, config)
+
+
+def lan_address() -> Optional[str]:
+    """The NAS's address on the network of its default route, where devices find it."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))
+            return s.getsockname()[0]
+    except OSError:
+        return None
+
+
+def names_status(engine, config) -> Dict[str, Any]:
+    return {"enabled": bool(_section(config).get("names")), "domain": domain(), "address": lan_address()}
+
+
 def status(engine, config) -> Dict[str, Any]:
     is_installed = installed(engine)
     return {
@@ -338,6 +439,7 @@ def status(engine, config) -> Dict[str, Any]:
         "running": running(engine) if is_installed else False,
         "enabled": enabled(config),
         "sites": sites(engine) if is_installed else [],
+        "names": names_status(engine, config),
         "ca_fingerprint": tls.ca_fingerprint() if tls.ca_file().exists() else None,
     }
 
@@ -355,7 +457,7 @@ def reconcile(engine, desired: Dict[str, Any], mode: str = "declarative") -> Lis
         return [_result("installed", "Caddy is not installed: install it from the Reverse proxy page")]
     results: List[ActionResult] = []
     try:
-        changed = prepare(engine)
+        changed = prepare(engine, bool(desired.get("names")))
         manual = desired.get("sites") or {}
         for name, site in sorted(manual.items()):
             file = site_file(engine, OWNER, check_name(name))

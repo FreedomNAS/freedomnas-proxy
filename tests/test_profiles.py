@@ -13,7 +13,8 @@ from freedomnas.engine import FreedomNASEngine
 
 VALUES = {"group": "caddy", "path": "/p", "cert": "/c.pem", "key": "/k.pem", "file": "/f", "dir": "/d"}
 EDITIONS = ["arch", "artix", "debian", "freebsd", "gentoo", "void"]
-NOT_COMMANDS = {"packages", "init_packages", "services", "group", "config_file", "tls_dir", "sites_dir", "main_template", "site_template"}
+NOT_COMMANDS = {"packages", "init_packages", "services", "group", "config_file", "tls_dir", "sites_dir", "names_dir",
+                "main_template", "site_template", "names_template", "redirect_template"}
 
 
 def engine_for(profile_dir, edition):

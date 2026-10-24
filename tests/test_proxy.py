@@ -238,3 +238,65 @@ def test_setup_after_disable_turns_caddy_back_on_with_the_sites(engine, config, 
     assert ["enable", "restart"] == [a for a in engine.actions("services") if a in ("enable", "restart")]
     assert config.get_module_config("proxy")["sites"] == {"printer": {"port": 8443, "upstream": "192.168.1.50:80"}}
     assert f"{SITES}/site-printer.caddy" in engine.files
+
+
+def test_names_add_one_https_site_per_name_and_the_redirect(engine, config, monkeypatch):
+    monkeypatch.setattr(proxy, "_hostname", lambda: "nas")
+    set_up(engine, config)
+    proxy.add_site(engine, config, "printer", 8443, "192.168.1.50:80")
+    assert "import /etc/caddy/freedomnas-names/*.caddy printer 192.168.1.50:80" in engine.files[f"{SITES}/site-printer.caddy"]
+    status = proxy.set_names(engine, config, True)
+    assert status["enabled"] and status["domain"] == "nas.home.arpa"
+    names = engine.files["/etc/caddy/freedomnas-names/name.caddy"]
+    assert "{args.0}.nas.home.arpa {" in names and "reverse_proxy {args.1}" in names
+    assert "http://*.nas.home.arpa {" in engine.files[f"{SITES}/names.caddy"]
+    assert engine.actions("proxy")[-2:] == ["validate", "reload"]
+    assert config.get_module_config("proxy")["names"] is True
+    assert proxy.reconcile(engine, config.get_module_config("proxy"), "additive") == []
+    assert engine.actions("proxy").count("names_configure") >= 1
+    engine.calls.clear()
+    proxy.set_names(engine, config, False)
+    assert "/etc/caddy/freedomnas-names/name.caddy" not in engine.files
+    assert f"{SITES}/names.caddy" not in engine.files
+    assert engine.actions("proxy").count("names_unconfigure") == 1
+    engine.calls.clear()
+    proxy.reconcile(engine, config.get_module_config("proxy"), "additive")
+    assert "names_unconfigure" not in engine.actions("proxy") and "names_configure" not in engine.actions("proxy")
+
+
+def test_names_need_443_and_80_free(engine, config):
+    set_up(engine, config)
+    engine.listening = "*:22\n0.0.0.0:80\n"
+    with pytest.raises(proxy.ProxyError, match="Port 80"):
+        proxy.set_names(engine, config, True)
+    assert "/etc/caddy/freedomnas-names/name.caddy" not in engine.files
+
+
+def test_names_that_caddy_refuses_change_nothing(engine, config):
+    set_up(engine, config)
+    engine.failing.add(("proxy", "validate"))
+    with pytest.raises(Exception):
+        proxy.set_names(engine, config, True)
+    assert "/etc/caddy/freedomnas-names/name.caddy" not in engine.files
+    assert not config.get_module_config("proxy").get("names")
+
+
+def test_a_site_cannot_take_a_name_or_the_ports_names_use(engine, config):
+    set_up(engine, config)
+    engine.files[f"{SITES}/app-jellyfin.caddy"] = "# freedomnas-site app jellyfin 8096 127.0.0.1:20001\n"
+    with pytest.raises(proxy.ProxyError, match="already the site of a app"):
+        proxy.add_site(engine, config, "jellyfin", 9443, "127.0.0.1:9")
+    proxy.set_names(engine, config, True)
+    with pytest.raises(proxy.ProxyError, match="serves the sites by name"):
+        proxy.add_site(engine, config, "web", 443, "127.0.0.1:9")
+
+
+def test_every_edition_formats_the_name_templates(engine):
+    import json
+    from conftest import REPO
+    for f in sorted((REPO / "profiles/proxy").glob("*.json")):
+        d = json.loads(f.read_text())["proxy"]
+        site = d["site_template"].format(owner="app", name="web", port=8443, upstream="127.0.0.1:9")
+        assert site.rstrip().endswith(f"import {d['names_dir']}/*.caddy web 127.0.0.1:9"), f.name
+        assert ".nas.home.arpa {" in d["names_template"].format(domain="nas.home.arpa"), f.name
+        assert "http://*.nas.home.arpa" in d["redirect_template"].format(domain="nas.home.arpa"), f.name

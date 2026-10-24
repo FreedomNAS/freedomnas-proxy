@@ -40,6 +40,24 @@
   </div>
 </div>
 
+<div class="section" id="names-section" hidden>
+  <div class="card">
+    <div class="card-title" style="margin-bottom:10px">Names</div>
+    <p class="text-muted text-sm" style="margin:0 0 12px">
+      Every site can also answer by name on the usual HTTPS port, such as
+      <span class="font-mono" id="names-example"></span>, with no port to remember.
+    </p>
+    <table style="width:100%;font-size:0.875rem">
+      <tbody id="names-body"></tbody>
+    </table>
+    <div class="advanced-only" style="margin-top:12px">
+      <button class="btn btn-primary btn-sm" id="btn-names"></button>
+      <span class="form-hint" style="margin-left:8px">Uses ports 443 and 80 of the NAS.</span>
+    </div>
+    <p class="form-hint" id="names-dns" hidden style="margin-top:12px"></p>
+  </div>
+</div>
+
 <div class="section" id="sites-section" hidden>
   <div class="card">
     <div class="d-flex items-center" style="justify-content:space-between;margin-bottom:10px">
