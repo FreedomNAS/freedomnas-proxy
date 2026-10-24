@@ -79,7 +79,8 @@ function renderNames(s) {
   dns.innerHTML = `Your devices find these names through your DNS: point every name under
     <span class="font-mono">${esc(names.domain || '')}</span> (a wildcard record
     <span class="font-mono">*.${esc(names.domain || '')}</span>) at this NAS's address on your network${
-    names.address ? `, <span class="font-mono">${esc(names.address)}</span>` : ''}, in your router or in Pi-hole.`;
+    names.address ? `, <span class="font-mono">${esc(names.address)}</span>` : ''}. Pi-hole from the Containers
+    catalogue does it by itself, for the devices that use it as DNS server; otherwise add that record in your router.`;
 }
 
 async function toggleNames() {
