@@ -71,7 +71,7 @@ function renderSites(sites) {
       <td class="font-mono text-sm">${esc(site.upstream)}</td>
       <td class="text-muted">${esc(OWNERS[site.owner] || site.owner)}</td>
       <td style="text-align:right">${site.owner === 'site'
-        ? `<button class="btn btn-danger btn-sm" data-remove="${esc(site.name)}">Remove</button>` : ''}</td>
+        ? `<button class="btn btn-danger btn-sm advanced-only" data-remove="${esc(site.name)}">Remove</button>` : ''}</td>
     </tr>`).join('');
 }
 
@@ -136,4 +136,9 @@ async function onSiteAction(e) {
     setLoading(btn, false);
   }
   loadStatus();
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
