@@ -7,7 +7,8 @@ arch=('any')
 url="https://codeberg.org/FreedomNAS/freedomnas-proxy"
 license=('MPL-2.0')
 depends=('freedomnas-core>0.9.12' 'freedomnas-webui>0.9.12')
-optdepends=("caddy: the reverse proxy itself, installed from the WebUI otherwise")
+optdepends=("caddy: the reverse proxy itself, installed from the WebUI otherwise"
+            "lego: Let's Encrypt certificates for your own domain, installed from the WebUI otherwise")
 source=("git+https://codeberg.org/FreedomNAS/freedomnas-proxy.git#tag=v${pkgver}")
 sha256sums=('SKIP')
 

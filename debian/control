@@ -11,7 +11,7 @@ Vcs-Git: https://codeberg.org/FreedomNAS/freedomnas-proxy.git
 Package: freedomnas-module-proxy
 Architecture: all
 Depends: ${misc:Depends}, freedomnas-core (>> 0.9.12), freedomnas-webui (>> 0.9.12)
-Recommends: caddy
+Recommends: caddy, lego
 Description: Reverse proxy for FreedomNAS: HTTPS for every web app
  FreedomNAS community module that puts Caddy in front of the NAS's web
  apps, serving each over HTTPS on its own port with FreedomNAS's own

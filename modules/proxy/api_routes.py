@@ -10,6 +10,10 @@ POST   /disable       — stop Caddy, keep it off at boot and put the apps behin
 POST   /sites         — {name, port, upstream}: serve upstream over HTTPS on port
 DELETE /sites/{name}  — remove a site added by hand
 POST   /names         — {enabled}: serve every site by name too, https://<name>.<hostname>.home.arpa
+POST   /acme          — {domain, email, provider, env, server}: a domain of your own with its
+                        Let's Encrypt certificate through the DNS provider (a job); env is KEY=value
+                        lines or an object, and keys left out keep their saved values
+DELETE /acme          — stop using the own domain
 """
 
 import asyncio
@@ -111,6 +115,27 @@ async def add_site(body: dict, username: str = Depends(authenticate)):
 @router.post("/names")
 async def names(body: dict, username: str = Depends(authenticate)):
     return await _call(proxy.set_names, get_engine(), get_config(), bool(body.get("enabled")))
+
+
+@router.post("/acme")
+async def acme(body: dict, username: str = Depends(authenticate)):
+    engine, config = get_engine(), get_config()
+    section = config.get_module_config(proxy.MODULE_ID) or {}
+    try:
+        if not proxy.enabled(config):
+            raise proxy.ProxyError("Set up the reverse proxy first")
+        if not section.get("names"):
+            raise proxy.ProxyError("Serve the sites by name first: the own domain names them too")
+        proxy.check_acme(body, section.get("acme"))
+    except proxy.ProxyError as exc:
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
+    return _start_job("certificate", lambda: proxy.set_acme(engine, config, body))
+
+
+@router.delete("/acme")
+async def remove_acme(username: str = Depends(authenticate)):
+    result = await _call(proxy.remove_acme, get_engine(), get_config())
+    return result if isinstance(result, JSONResponse) else {"removed": True}
 
 
 @router.delete("/sites/{name}")

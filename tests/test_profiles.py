@@ -11,10 +11,13 @@ import pytest
 from conftest import PROFILES, REPO
 from freedomnas.engine import FreedomNASEngine
 
-VALUES = {"group": "caddy", "path": "/p", "cert": "/c.pem", "key": "/k.pem", "file": "/f", "dir": "/d"}
+VALUES = {"group": "caddy", "path": "/p", "cert": "/c.pem", "key": "/k.pem", "file": "/f", "dir": "/d",
+          "env_file": "/e", "email": "a@b.org", "server": "https://ca/dir", "provider": "desec",
+          "domain": "nas.example.org", "tls_dir": "/t", "cron": "/c"}
 EDITIONS = ["arch", "artix", "debian", "freebsd", "gentoo", "void"]
 NOT_COMMANDS = {"packages", "init_packages", "services", "group", "config_file", "tls_dir", "sites_dir", "names_dir",
-                "main_template", "site_template", "names_template", "redirect_template"}
+                "main_template", "site_template", "names_template", "redirect_template",
+                "acme_dir", "acme_tls_dir", "acme_cron_file", "acme_log", "acme_hook_template", "acme_cron_template"}
 
 
 def engine_for(profile_dir, edition):

@@ -25,8 +25,15 @@ its name and upstream; names_dir holds the one names_template file while names
 are on and nothing while they are off, so the sites are the same files either
 way and no other module needs to know about names.
 
+With a domain of the user's own (modules.proxy.acme), lego gets a Let's
+Encrypt certificate for <domain> and *.<domain> through the DNS-01 challenge
+of the user's DNS provider (no port is opened to the internet), a daily cron
+job renews it, and every site also answers as https://<name>.<domain>. The
+provider's credentials stay in a root-only env file beside lego's data.
+
 Configuration (modules.proxy): {"enabled": bool, "names": bool,
-"sites": {name: {"port", "upstream"}}}.
+"sites": {name: {"port", "upstream"}},
+"acme": {"domain", "email", "provider", "server", "env": {KEY: value}}}.
 """
 
 from __future__ import annotations
@@ -196,12 +203,12 @@ def _tls_current(engine) -> bool:
         return False
 
 
-def names_file(engine) -> str:
-    return f"{value(engine, 'names_dir')}/name.caddy"
+def names_file(engine, suffix: str = "") -> str:
+    return f"{value(engine, 'names_dir')}/name{suffix}.caddy"
 
 
-def redirect_file(engine) -> str:
-    return f"{value(engine, 'sites_dir')}/names.caddy"
+def redirect_file(engine, suffix: str = "") -> str:
+    return f"{value(engine, 'sites_dir')}/names{suffix}.caddy"
 
 
 def _put(engine, file: str, text: Optional[str]) -> bool:
@@ -218,31 +225,39 @@ def _put(engine, file: str, text: Optional[str]) -> bool:
     return True
 
 
-def prepare_names(engine, on: bool) -> bool:
+def _names_files(engine, suffix: str, name: Optional[str], tls_line: str) -> bool:
+    names = value(engine, "names_template").format(domain=name, tls=tls_line) if name else None
+    redirect = value(engine, "redirect_template").format(domain=name, tls=tls_line) if name else None
+    changed = _put(engine, names_file(engine, suffix), names)
+    return _put(engine, redirect_file(engine, suffix), redirect) or changed
+
+
+def prepare_names(engine, on: bool, acme: Optional[Dict[str, Any]] = None) -> bool:
     """
-    The names' files, and what lets Caddy open ports 443 and 80
-    (names_configure, every time names are on; names_unconfigure once,
-    when they go off).
+    The names' files: the local domain's with FreedomNAS's certificate, the
+    own domain's with its Let's Encrypt one once it is there; and what lets
+    Caddy open ports 443 and 80 (names_configure, every time names are on;
+    names_unconfigure once, when they go off).
     """
-    name = domain()
     current, _ = engine.execute(CATEGORY, "file_read", check=False, file=names_file(engine))
     if on:
         engine.execute(CATEGORY, "names_configure")
-    changed = _put(engine, names_file(engine), value(engine, "names_template").format(domain=name) if on else None)
-    redirect = value(engine, "redirect_template").format(domain=name) if on else None
-    changed = _put(engine, redirect_file(engine), redirect) or changed
+    changed = _names_files(engine, "", domain() if on else None, "import freedomnas_tls")
+    own = acme.get("domain") if (on and acme and acme_ready(engine)) else None
+    folder = value(engine, "acme_tls_dir")
+    changed = _names_files(engine, "-acme", own, f"tls {folder}/cert.pem {folder}/key.pem") or changed
     if not on and current:
         engine.execute(CATEGORY, "names_unconfigure")
     return changed
 
 
-def prepare(engine, names: bool = False) -> bool:
+def prepare(engine, names: bool = False, acme: Optional[Dict[str, Any]] = None) -> bool:
     """The directories, the copy of the certificate and Caddy's configuration; True if any changed."""
     group = value(engine, "group")
     engine.execute(CATEGORY, "service_configure")
     for key in ("tls_dir", "sites_dir", "names_dir"):
         engine.execute(CATEGORY, "dir_prepare", group=group, path=value(engine, key))
-    changed = prepare_names(engine, names)
+    changed = prepare_names(engine, names, acme)
     if not _tls_current(engine):
         engine.execute(CATEGORY, "tls_copy", group=group, path=value(engine, "tls_dir"),
                        cert=str(tls.cert_file()), key=str(tls.key_file()))
@@ -431,7 +446,204 @@ def lan_address() -> Optional[str]:
 
 
 def names_status(engine, config) -> Dict[str, Any]:
-    return {"enabled": bool(_section(config).get("names")), "domain": domain(), "address": lan_address()}
+    acme = _section(config).get("acme") or {}
+    own = acme.get("domain") if acme and acme_ready(engine) else None
+    return {"enabled": bool(_section(config).get("names")), "domain": domain(), "own_domain": own,
+            "address": lan_address()}
+
+
+SERVERS = {
+    "production": "https://acme-v02.api.letsencrypt.org/directory",
+    "staging": "https://acme-staging-v02.api.letsencrypt.org/directory",
+}
+_DOMAIN = re.compile(r"(?=.{4,200}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
+_EMAIL = re.compile(r"[A-Za-z0-9._%+-]{1,64}@(?:[A-Za-z0-9-]{1,63}\.)+[A-Za-z]{2,63}")
+_PROVIDER = re.compile(r"[a-z0-9]{1,40}(?:[._-][a-z0-9]{1,40}){0,3}")
+_SERVER = re.compile(r"https://[A-Za-z0-9.-]+(?::\d{1,5})?(?:/[A-Za-z0-9._~-]+)*/?")
+_ENV_KEY = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
+_ENV_VALUE = re.compile(r"[^\s'\\]{1,512}")
+
+
+def _env_pairs(env: Any) -> Dict[str, str]:
+    if isinstance(env, str):
+        pairs = {}
+        for line in env.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            key, sep, val = line.partition("=")
+            if not sep:
+                raise ProxyError(f"'{line}' is not KEY=value")
+            pairs[key.strip()] = val.strip()
+        env = pairs
+    if not isinstance(env, dict):
+        raise ProxyError("The provider's credentials are KEY=value lines")
+    for key, val in env.items():
+        if not _ENV_KEY.fullmatch(str(key)):
+            raise ProxyError(f"'{key}' is not a variable name: capitals, digits and _")
+        if not _ENV_VALUE.fullmatch(str(val)):
+            raise ProxyError(f"The value of {key} is empty or has spaces, quotes or backslashes")
+    return {str(k): str(v) for k, v in env.items()}
+
+
+def check_acme(settings: Dict[str, Any], previous: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The settings as they are kept; credentials left out keep their previous values."""
+    name = str(settings.get("domain") or "").strip().lower().rstrip(".")
+    if not _DOMAIN.fullmatch(name):
+        raise ProxyError(f"'{name}' is not a domain name such as nas.example.org")
+    if name.endswith(".home.arpa") or name.endswith(".local"):
+        raise ProxyError("Let's Encrypt signs only public domains, not .home.arpa or .local")
+    email = str(settings.get("email") or "").strip()
+    if not _EMAIL.fullmatch(email):
+        raise ProxyError(f"'{email}' is not an email address")
+    provider = str(settings.get("provider") or "").strip().lower()
+    if not _PROVIDER.fullmatch(provider):
+        raise ProxyError("The DNS provider is lego's name for it, such as desec, cloudflare or ovh")
+    server = str(settings.get("server") or "production").strip()
+    if server not in SERVERS and not _SERVER.fullmatch(server):
+        raise ProxyError("The certificate authority is production, staging or an https:// ACME directory")
+    env = _env_pairs(settings.get("env") or {})
+    if previous and previous.get("provider") == provider:
+        env = {**(previous.get("env") or {}), **env}
+    if not env:
+        raise ProxyError("Give the DNS provider's credentials (KEY=value lines, as lego names them)")
+    return {"domain": name, "email": email, "provider": provider, "server": server, "env": env}
+
+
+def _acme_paths(engine) -> Dict[str, str]:
+    path = value(engine, "acme_dir")
+    return {"path": path, "env_file": f"{path}/env", "hook": f"{path}/deploy-hook.sh",
+            "tls_dir": value(engine, "acme_tls_dir"), "cron": value(engine, "acme_cron_file"),
+            "log": value(engine, "acme_log")}
+
+
+def _server_url(server: str) -> str:
+    return SERVERS.get(server, server)
+
+
+def _put_secret(engine, file: str, text: str) -> bool:
+    current, _ = engine.execute(CATEGORY, "file_read", check=False, file=file)
+    if current == text:
+        return False
+    engine.execute_with_stdin(CATEGORY, "acme_secret_write", text, file=file)
+    return True
+
+
+def acme_files(engine, acme: Dict[str, Any]) -> bool:
+    """The env file with the credentials, the deploy hook and the renewal's cron file."""
+    paths = _acme_paths(engine)
+    env = "".join(f"{k}='{v}'\n" for k, v in sorted(acme["env"].items()))
+    hook = value(engine, "acme_hook_template").format(
+        domain=acme["domain"], group=value(engine, "group"), path=paths["path"], tls_dir=paths["tls_dir"],
+        config_file=value(engine, "config_file"))
+    cron = value(engine, "acme_cron_template").format(
+        domain=acme["domain"], minute=sum(acme["domain"].encode()) % 60, env_file=paths["env_file"],
+        email=acme["email"], server=_server_url(acme["server"]), provider=acme["provider"],
+        path=paths["path"], hook=paths["hook"], log=paths["log"])
+    changed = _put_secret(engine, paths["env_file"], env)
+    changed = _put_secret(engine, paths["hook"], hook) or changed
+    return _put_secret(engine, paths["cron"], cron) or changed
+
+
+def acme_ready(engine) -> bool:
+    current, _ = engine.execute(CATEGORY, "file_read", check=False, file=f"{value(engine, 'acme_tls_dir')}/cert.pem")
+    return "BEGIN CERTIFICATE" in current
+
+
+def acme_obtain(engine, acme: Dict[str, Any]) -> None:
+    paths = _acme_paths(engine)
+    try:
+        engine.execute(CATEGORY, "acme_obtain", timeout=1200, env_file=paths["env_file"], email=acme["email"],
+                       server=_server_url(acme["server"]), provider=acme["provider"], domain=acme["domain"],
+                       path=paths["path"])
+    except Exception as exc:
+        text = str(exc)
+        tail = text.split("Stderr:", 1)[-1].strip().splitlines()[-6:]
+        raise ProxyError("Let's Encrypt did not sign the certificate: " + " ".join(l.strip() for l in tail))
+
+
+def acme_install(engine, acme: Dict[str, Any]) -> bool:
+    """Copy lego's certificate where Caddy reads it; True if the copy changed."""
+    paths = _acme_paths(engine)
+    issued, _ = engine.execute(CATEGORY, "file_read", check=False,
+                               file=f"{paths['path']}/certificates/{acme['domain']}.crt")
+    if "BEGIN CERTIFICATE" not in issued:
+        return False
+    copy, _ = engine.execute(CATEGORY, "file_read", check=False, file=f"{paths['tls_dir']}/cert.pem")
+    if copy == issued:
+        return False
+    engine.execute(CATEGORY, "acme_install", group=value(engine, "group"), tls_dir=paths["tls_dir"],
+                   path=paths["path"], domain=acme["domain"])
+    return True
+
+
+def set_acme(engine, config, settings: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Use a domain of the user's own: get its Let's Encrypt certificate through
+    the DNS provider and serve every site by name under it too.
+    """
+    if not enabled(config):
+        raise ProxyError("Set up the reverse proxy first")
+    section = _section(config)
+    if not section.get("names"):
+        raise ProxyError("Serve the sites by name first: the own domain names them too")
+    acme = check_acme(settings, section.get("acme"))
+    try:
+        engine.execute(CATEGORY, "acme_installed_check")
+    except Exception:
+        install(engine)
+    acme_files(engine, acme)
+    issued, _ = engine.execute(CATEGORY, "file_read", check=False,
+                               file=f"{_acme_paths(engine)['path']}/certificates/{acme['domain']}.crt")
+    previous = section.get("acme") or {}
+    if "BEGIN CERTIFICATE" not in issued or any(previous.get(k) != acme[k] for k in ("domain", "server", "provider")):
+        try:
+            acme_obtain(engine, acme)
+        except ProxyError:
+            if previous:
+                acme_files(engine, previous)
+            else:
+                paths = _acme_paths(engine)
+                engine.execute(CATEGORY, "acme_remove", cron=paths["cron"], tls_dir=paths["tls_dir"])
+            raise
+    acme_install(engine, acme)
+    section["acme"] = acme
+    failed = [r.error for r in reconcile(engine, section, "additive") if r.target_state == "failed"]
+    if failed:
+        raise ProxyError(f"The certificate is there, but Caddy refused it: {failed[0]}")
+    config.set_module_config(MODULE_ID, section)
+    for failure in reconcile_others(engine, config):
+        logger.warning("After the own domain: %s", failure)
+    return acme_status(engine, config)
+
+
+def remove_acme(engine, config) -> None:
+    section = _section(config)
+    if not section.get("acme"):
+        raise ProxyError("No own domain is set up")
+    paths = _acme_paths(engine)
+    section.pop("acme")
+    engine.execute(CATEGORY, "acme_remove", cron=paths["cron"], tls_dir=paths["tls_dir"])
+    reconcile(engine, section, "additive")
+    config.set_module_config(MODULE_ID, section)
+    for failure in reconcile_others(engine, config):
+        logger.warning("After removing the own domain: %s", failure)
+
+
+def acme_status(engine, config) -> Optional[Dict[str, Any]]:
+    acme = _section(config).get("acme")
+    if not acme:
+        return None
+    expires = None
+    copy, _ = engine.execute(CATEGORY, "file_read", check=False, file=f"{value(engine, 'acme_tls_dir')}/cert.pem")
+    if "BEGIN CERTIFICATE" in copy:
+        try:
+            from cryptography import x509
+            expires = x509.load_pem_x509_certificate(copy.encode()).not_valid_after_utc.isoformat()
+        except Exception:
+            expires = None
+    return {"domain": acme["domain"], "email": acme["email"], "provider": acme["provider"],
+            "server": acme["server"], "credentials": sorted(acme.get("env") or {}), "expires": expires}
 
 
 def status(engine, config) -> Dict[str, Any]:
@@ -442,6 +654,7 @@ def status(engine, config) -> Dict[str, Any]:
         "enabled": enabled(config),
         "sites": sites(engine) if is_installed else [],
         "names": names_status(engine, config),
+        "acme": acme_status(engine, config) if is_installed else None,
         "ca_fingerprint": tls.ca_fingerprint() if tls.ca_file().exists() else None,
     }
 
@@ -458,8 +671,22 @@ def reconcile(engine, desired: Dict[str, Any], mode: str = "declarative") -> Lis
     if not installed(engine):
         return [_result("installed", "Caddy is not installed: install it from the Reverse proxy page")]
     results: List[ActionResult] = []
+    acme = desired.get("acme") if desired.get("names") else None
+    if acme:
+        try:
+            acme_files(engine, acme)
+            if not acme_ready(engine) and not acme_install(engine, acme):
+                acme_obtain(engine, acme)
+            acme_install(engine, acme)
+        except Exception as exc:
+            results.append(_result("acme", str(exc)))
+    else:
+        cron, _ = engine.execute(CATEGORY, "file_read", check=False, file=value(engine, "acme_cron_file"))
+        if cron:
+            engine.execute(CATEGORY, "acme_remove", cron=value(engine, "acme_cron_file"),
+                           tls_dir=value(engine, "acme_tls_dir"))
     try:
-        changed = prepare(engine, bool(desired.get("names")))
+        changed = prepare(engine, bool(desired.get("names")), acme)
         manual = desired.get("sites") or {}
         for name, site in sorted(manual.items()):
             file = site_file(engine, OWNER, check_name(name))

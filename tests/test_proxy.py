@@ -28,7 +28,7 @@ def test_setup_takes_over_caddys_configuration(engine, config):
 def test_setup_installs_caddy_when_missing(engine, config):
     engine.installed = False
     proxy.setup(engine, config)
-    assert [kw["package_name"] for c, a, kw in engine.calls if (c, a) == ("packages", "install")] == ["caddy"]
+    assert [kw["package_name"] for c, a, kw in engine.calls if (c, a) == ("packages", "install")] == ["caddy", "lego"]
 
 
 def test_a_site_is_written_checked_and_kept(engine, config):
@@ -197,7 +197,7 @@ def test_artix_installs_caddy_with_the_service_of_its_init(artix, config):
     artix.installed = False
     proxy.setup(artix, config)
     assert [kw["package_name"] for c, a, kw in artix.calls if (c, a) == ("packages", "install")] == [
-        "caddy-bin", "caddy-dinit"]
+        "caddy-bin", "lego-bin", "caddy-dinit"]
 
 
 def test_disable_stops_caddy_first_then_brings_the_apps_back(engine, config, monkeypatch):
@@ -298,8 +298,8 @@ def test_every_edition_formats_the_name_templates(engine):
         d = json.loads(f.read_text())["proxy"]
         site = d["site_template"].format(owner="app", name="web", port=8443, upstream="127.0.0.1:9")
         assert site.rstrip().endswith(f"import {d['names_dir']}/*.caddy web 127.0.0.1:9"), f.name
-        assert ".nas.home.arpa {" in d["names_template"].format(domain="nas.home.arpa"), f.name
-        assert "http://*.nas.home.arpa" in d["redirect_template"].format(domain="nas.home.arpa"), f.name
+        assert ".nas.home.arpa {" in d["names_template"].format(domain="nas.home.arpa", tls="import freedomnas_tls"), f.name
+        assert "http://*.nas.home.arpa" in d["redirect_template"].format(domain="nas.home.arpa", tls="import freedomnas_tls"), f.name
 
 
 def test_gentoo_accepts_the_caddy_that_works_before_installing_it(tmp_path, certificate, config):
@@ -309,4 +309,120 @@ def test_gentoo_accepts_the_caddy_that_works_before_installing_it(tmp_path, cert
     proxy.setup(gentoo, config)
     actions = gentoo.actions()
     assert actions.index("install_prepare") < actions.index("install")
-    assert [kw["package_name"] for c, a, kw in gentoo.calls if a == "install"] == [">=www-servers/caddy-2.11"]
+    assert [kw["package_name"] for c, a, kw in gentoo.calls if a == "install"] == [">=www-servers/caddy-2.11", "app-crypt/lego"]
+
+
+CERT = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+ACME = {"domain": "nas.example.org", "email": "me@example.org", "provider": "desec",
+        "env": "DESEC_TOKEN=abc123\n", "server": "staging"}
+
+
+@pytest.fixture
+def lego(engine, monkeypatch):
+    """lego and the copy for Caddy, as files in the fake engine."""
+    real = engine.execute
+    issued = f"{engine.section['acme_dir']}/certificates/nas.example.org.crt"
+
+    def execute(category, action, timeout=30, check=True, **kw):
+        result = real(category, action, timeout=timeout, check=check, **kw)
+        if (category, action) == ("proxy", "acme_obtain"):
+            engine.files[issued] = CERT
+        if (category, action) == ("proxy", "acme_install"):
+            engine.files[f"{kw['tls_dir']}/cert.pem"] = engine.files[issued]
+        if (category, action) == ("proxy", "acme_remove"):
+            engine.files.pop(kw["cron"], None)
+            engine.files.pop(f"{kw['tls_dir']}/cert.pem", None)
+        return result
+
+    monkeypatch.setattr(engine, "execute", execute)
+    monkeypatch.setattr(proxy, "acme_status", lambda e, c: (c.get_module_config("proxy").get("acme") or {}).get("domain"))
+    return engine
+
+
+def names_on(engine, config):
+    set_up(engine, config)
+    proxy.set_names(engine, config, True)
+
+
+def test_an_own_domain_gets_its_certificate_and_names_every_site(lego, config):
+    names_on(lego, config)
+    proxy.set_acme(lego, config, dict(ACME))
+    s = lego.section
+    obtain = next(kw for c, a, kw in lego.calls if a == "acme_obtain")
+    assert obtain["server"] == proxy.SERVERS["staging"] and obtain["provider"] == "desec"
+    assert obtain["domain"] == "nas.example.org" and obtain["env_file"] == f"{s['acme_dir']}/env"
+    assert lego.files[f"{s['acme_dir']}/env"] == "DESEC_TOKEN='abc123'\n"
+    secret_writes = [kw["file"] for c, a, kw in lego.calls if a == "acme_secret_write"]
+    assert f"{s['acme_dir']}/env" in secret_writes and s["acme_cron_file"] in secret_writes
+    cron = lego.files[s["acme_cron_file"]]
+    assert "--dns desec" in cron and "renew --days 30" in cron and f"sh {s['acme_dir']}/deploy-hook.sh" in cron
+    assert "DESEC_TOKEN" not in cron
+    own = lego.files["/etc/caddy/freedomnas-names/name-acme.caddy"]
+    assert "{args.0}.nas.example.org {" in own and f"tls {s['acme_tls_dir']}/cert.pem {s['acme_tls_dir']}/key.pem" in own
+    assert "http://*.nas.example.org" in lego.files[f"{SITES}/names-acme.caddy"]
+    assert config.get_module_config("proxy")["acme"]["env"] == {"DESEC_TOKEN": "abc123"}
+
+
+def test_a_refused_certificate_changes_nothing_in_caddy(engine, config):
+    names_on(engine, config)
+    engine.failing.add(("proxy", "acme_obtain"))
+    with pytest.raises(proxy.ProxyError, match="did not sign"):
+        proxy.set_acme(engine, config, dict(ACME))
+    assert "/etc/caddy/freedomnas-names/name-acme.caddy" not in engine.files
+    assert "acme" not in config.get_module_config("proxy")
+    assert "acme_remove" in engine.actions()
+
+
+@pytest.mark.parametrize("change, message", [
+    ({"domain": "nas.home.arpa"}, "only public"),
+    ({"domain": "not a domain"}, "not a domain"),
+    ({"email": "nope"}, "not an email"),
+    ({"provider": "Bad Provider"}, "DNS provider"),
+    ({"server": "http://insecure/dir"}, "certificate authority"),
+    ({"env": "TOKEN=has space"}, "spaces"),
+    ({"env": "lower=x"}, "variable name"),
+    ({"env": ""}, "credentials"),
+])
+def test_bad_own_domain_settings_are_refused(change, message):
+    with pytest.raises(proxy.ProxyError, match=message):
+        proxy.check_acme({**ACME, **change})
+
+
+def test_credentials_left_out_keep_their_saved_values():
+    saved = proxy.check_acme(dict(ACME))
+    again = proxy.check_acme({**ACME, "env": ""}, saved)
+    assert again["env"] == {"DESEC_TOKEN": "abc123"}
+
+
+def test_an_own_domain_needs_names(engine, config):
+    set_up(engine, config)
+    with pytest.raises(proxy.ProxyError, match="by name first"):
+        proxy.set_acme(engine, config, dict(ACME))
+
+
+def test_a_reinstall_gets_the_certificate_again_at_reconcile(lego, config):
+    names_on(lego, config)
+    proxy.set_acme(lego, config, dict(ACME))
+    for f in [k for k in lego.files if "freedomnas-acme" in k or "certificates" in k or k.endswith("-acme.caddy")]:
+        del lego.files[f]
+    lego.calls.clear()
+    assert proxy.reconcile(lego, config.get_module_config("proxy"), "additive") == [proxy._result("config")]
+    assert "acme_obtain" in lego.actions() and "/etc/caddy/freedomnas-names/name-acme.caddy" in lego.files
+
+
+def test_removing_the_own_domain_keeps_the_local_names(lego, config):
+    names_on(lego, config)
+    proxy.set_acme(lego, config, dict(ACME))
+    proxy.remove_acme(lego, config)
+    assert "/etc/caddy/freedomnas-names/name-acme.caddy" not in lego.files
+    assert "/etc/caddy/freedomnas-names/name.caddy" in lego.files
+    assert lego.section["acme_cron_file"] not in lego.files
+    assert "acme" not in config.get_module_config("proxy")
+
+
+def test_lego_is_installed_when_missing(lego, config):
+    names_on(lego, config)
+    lego.failing.add(("proxy", "acme_installed_check"))
+    lego.calls.clear()
+    proxy.set_acme(lego, config, dict(ACME))
+    assert "lego" in [kw["package_name"] for c, a, kw in lego.calls if (c, a) == ("packages", "install")]

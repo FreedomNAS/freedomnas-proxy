@@ -58,6 +58,62 @@
   </div>
 </div>
 
+<div class="section advanced-only" id="acme-section" hidden>
+  <div class="card">
+    <div class="card-title" style="margin-bottom:10px">Your own domain</div>
+    <p class="text-muted text-sm" style="margin:0 0 12px">
+      With a domain of your own, every site also answers as <span class="font-mono">https://jellyfin.&lt;your domain&gt;/</span>
+      with a Let's Encrypt certificate, which every device trusts with nothing to install. The certificate comes through
+      your DNS provider (the DNS-01 challenge): no port of the NAS is opened to the internet. It is renewed by itself.
+    </p>
+    <table style="width:100%;font-size:0.875rem" id="acme-state" hidden>
+      <tbody id="acme-body"></tbody>
+    </table>
+    <form id="form-acme" style="margin-top:12px">
+      <div class="d-flex gap-3" style="flex-wrap:wrap;align-items:flex-end">
+        <div class="form-group" style="margin:0">
+          <label for="f-acme-domain">Domain</label>
+          <input id="f-acme-domain" class="input" required placeholder="nas.example.org" style="max-width:220px">
+        </div>
+        <div class="form-group" style="margin:0">
+          <label for="f-acme-email">Email for Let's Encrypt</label>
+          <input id="f-acme-email" class="input" type="email" required placeholder="you@example.org" style="max-width:220px">
+        </div>
+        <div class="form-group" style="margin:0">
+          <label for="f-acme-provider">DNS provider</label>
+          <input id="f-acme-provider" class="input" required placeholder="desec" style="max-width:140px">
+        </div>
+        <div class="form-group" style="margin:0">
+          <label for="f-acme-server">Certificate authority</label>
+          <select id="f-acme-server" class="input">
+            <option value="production">Let's Encrypt</option>
+            <option value="staging">Let's Encrypt staging (for tests)</option>
+            <option value="custom" class="expert-only">Another ACME directory…</option>
+          </select>
+        </div>
+        <div class="form-group expert-only" id="acme-custom" style="margin:0" hidden>
+          <label for="f-acme-url">ACME directory</label>
+          <input id="f-acme-url" class="input" placeholder="https://acme.example.org/directory" style="max-width:280px">
+        </div>
+      </div>
+      <div class="form-group" style="margin:12px 0 0">
+        <label for="f-acme-env">Provider credentials</label>
+        <textarea id="f-acme-env" class="input font-mono" rows="3" style="max-width:520px"
+          placeholder="DESEC_TOKEN=your-token"></textarea>
+        <span class="form-hint" style="display:block">
+          One <span class="font-mono">KEY=value</span> per line, with the names lego gives them for your provider
+          (<a href="https://go-acme.github.io/lego/dns/" target="_blank" rel="noopener">lego's list of DNS providers</a>).
+          They are kept on the NAS for root only; leave them empty to keep the saved ones.
+        </span>
+      </div>
+      <div style="margin-top:12px">
+        <button type="submit" class="btn btn-primary btn-sm" id="btn-acme">Get the certificate</button>
+        <button type="button" class="btn btn-danger btn-sm" id="btn-acme-remove" hidden>Stop using this domain</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <div class="section" id="sites-section" hidden>
   <div class="card">
     <div class="d-flex items-center" style="justify-content:space-between;margin-bottom:10px">

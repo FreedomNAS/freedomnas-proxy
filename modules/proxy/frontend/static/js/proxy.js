@@ -7,6 +7,8 @@ const OWNERS = { site: 'Added here', app: 'Containers app' };
 const JOBS = {
   setup: { running: 'Setting up Caddy…', failed: 'Set up failed', done: 'Set up finished.' },
   disable: { running: 'Turning the reverse proxy off…', failed: 'Turning off failed', done: 'The reverse proxy is off.' },
+  certificate: { running: 'Asking Let\'s Encrypt for the certificate… (a minute or two)', failed: 'No certificate',
+                 done: 'The certificate is there.' },
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -14,6 +16,11 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-setup').addEventListener('click', setupProxy);
   document.getElementById('btn-disable').addEventListener('click', disableProxy);
   document.getElementById('btn-names').addEventListener('click', toggleNames);
+  document.getElementById('form-acme').addEventListener('submit', saveAcme);
+  document.getElementById('btn-acme-remove').addEventListener('click', removeAcme);
+  document.getElementById('f-acme-server').addEventListener('change', () => {
+    document.getElementById('acme-custom').hidden = document.getElementById('f-acme-server').value !== 'custom';
+  });
   document.getElementById('form-site').addEventListener('submit', addSite);
   document.getElementById('sites-body').addEventListener('click', onSiteAction);
   loadStatus();
@@ -56,7 +63,75 @@ function render() {
   document.getElementById('disable-row').hidden = !s.enabled || job.state === 'running';
   document.getElementById('sites-section').hidden = !s.enabled;
   renderNames(s);
+  renderAcme(s);
   renderSites(s.sites || []);
+}
+
+let _acmeFilled = false;
+
+function renderAcme(s) {
+  const names = s.names || {};
+  document.getElementById('acme-section').hidden = !(s.enabled && names.enabled);
+  const acme = s.acme;
+  const busy = (s.job || {}).state === 'running';
+  document.getElementById('acme-state').hidden = !acme;
+  document.getElementById('btn-acme-remove').hidden = !acme;
+  document.getElementById('btn-acme').textContent = acme ? 'Save and check the certificate' : 'Get the certificate';
+  document.getElementById('btn-acme').disabled = busy;
+  if (!acme) return;
+  const cas = { production: "Let's Encrypt", staging: "Let's Encrypt staging" };
+  const expires = acme.expires ? new Date(acme.expires).toLocaleDateString() : '—';
+  document.getElementById('acme-body').innerHTML = `
+    <tr><td class="text-muted" style="padding:5px 0;width:140px">Domain</td><td class="font-mono text-sm">${esc(acme.domain)}${
+      names.own_domain ? ' <span class="badge badge-ok">In use</span>' : ' <span class="badge badge-warn">No certificate yet</span>'}</td></tr>
+    <tr><td class="text-muted" style="padding:5px 0">Certificate</td><td>${esc(cas[acme.server] || acme.server)}, valid until ${esc(expires)}</td></tr>
+    <tr><td class="text-muted" style="padding:5px 0">DNS provider</td><td class="font-mono text-sm">${esc(acme.provider)} (${esc((acme.credentials || []).join(', '))})</td></tr>`;
+  if (!_acmeFilled) {
+    _acmeFilled = true;
+    document.getElementById('f-acme-domain').value = acme.domain;
+    document.getElementById('f-acme-email').value = acme.email;
+    document.getElementById('f-acme-provider').value = acme.provider;
+    const known = acme.server === 'production' || acme.server === 'staging';
+    document.getElementById('f-acme-server').value = known ? acme.server : 'custom';
+    document.getElementById('f-acme-url').value = known ? '' : acme.server;
+    document.getElementById('acme-custom').hidden = known;
+  }
+}
+
+async function saveAcme(e) {
+  e.preventDefault();
+  const choice = document.getElementById('f-acme-server').value;
+  const body = {
+    domain: document.getElementById('f-acme-domain').value.trim(),
+    email: document.getElementById('f-acme-email').value.trim(),
+    provider: document.getElementById('f-acme-provider').value.trim(),
+    server: choice === 'custom' ? document.getElementById('f-acme-url').value.trim() : choice,
+    env: document.getElementById('f-acme-env').value,
+  };
+  const btn = document.getElementById('btn-acme');
+  setLoading(btn, true, 'Starting…');
+  try {
+    await apiJSON('POST', '/api/proxy/acme', body);
+    document.getElementById('f-acme-env').value = '';
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'err');
+  }
+  setLoading(btn, false);
+  loadStatus();
+}
+
+async function removeAcme() {
+  if (!await confirm('Stop using this domain',
+    'The sites stop answering under your own domain; the local names stay. The certificate is no longer renewed.',
+    'Stop using it')) return;
+  try {
+    await apiJSON('DELETE', '/api/proxy/acme');
+    _acmeFilled = false;
+    toast('The own domain is no longer used.', 'ok');
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'err');
+  }
+  loadStatus();
 }
 
 function renderNames(s) {
