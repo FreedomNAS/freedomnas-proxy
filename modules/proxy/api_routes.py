@@ -14,6 +14,8 @@ POST   /acme          — {domain, email, provider, env, server}: a domain of yo
                         Let's Encrypt certificate through the DNS provider (a job); env is KEY=value
                         lines or an object, and keys left out keep their saved values
 DELETE /acme          — stop using the own domain
+POST   /dns           — {url, password}: keep the names in the network's Pi-hole (v6) from now on
+DELETE /dns           — take them out of it and stop
 """
 
 import asyncio
@@ -135,6 +137,17 @@ async def acme(body: dict, username: str = Depends(authenticate)):
 @router.delete("/acme")
 async def remove_acme(username: str = Depends(authenticate)):
     result = await _call(proxy.remove_acme, get_engine(), get_config())
+    return result if isinstance(result, JSONResponse) else {"removed": True}
+
+
+@router.post("/dns")
+async def dns(body: dict, username: str = Depends(authenticate)):
+    return await _call(proxy.set_dns, get_engine(), get_config(), body)
+
+
+@router.delete("/dns")
+async def remove_dns(username: str = Depends(authenticate)):
+    result = await _call(proxy.remove_dns, get_engine(), get_config())
     return result if isinstance(result, JSONResponse) else {"removed": True}
 
 

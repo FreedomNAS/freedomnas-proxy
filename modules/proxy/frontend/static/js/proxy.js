@@ -17,6 +17,8 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-disable').addEventListener('click', disableProxy);
   document.getElementById('btn-names').addEventListener('click', toggleNames);
   document.getElementById('form-acme').addEventListener('submit', saveAcme);
+  document.getElementById('form-pihole').addEventListener('submit', savePihole);
+  document.getElementById('btn-pihole-forget').addEventListener('click', forgetPihole);
   document.getElementById('btn-acme-remove').addEventListener('click', removeAcme);
   document.getElementById('f-acme-server').addEventListener('change', () => {
     document.getElementById('acme-custom').hidden = document.getElementById('f-acme-server').value !== 'custom';
@@ -157,7 +159,63 @@ function renderNames(s) {
     <span class="font-mono">${esc(names.domain || '')}</span> (a wildcard record
     <span class="font-mono">*.${esc(names.domain || '')}</span>) at this NAS's address on your network${
     names.address ? `, <span class="font-mono">${esc(names.address)}</span>` : ''}. Pi-hole from the Containers
-    catalogue does it by itself, for the devices that use it as DNS server; otherwise add that record in your router.`;
+    catalogue does it by itself, for the devices that use it as DNS server; a Pi-hole of your network can be kept up
+    to date below; otherwise add that record in your router.`;
+  renderPihole(names);
+}
+
+let _piholeFilled = false;
+
+function renderPihole(names) {
+  document.getElementById('pihole-box').hidden = !names.enabled;
+  const dns = names.dns;
+  const state = document.getElementById('pihole-state');
+  document.getElementById('btn-pihole-forget').hidden = !dns;
+  document.getElementById('btn-pihole').textContent = dns ? 'Save' : 'Keep the names there';
+  state.hidden = !dns;
+  if (!dns) return;
+  if (!_piholeFilled) {
+    _piholeFilled = true;
+    document.getElementById('f-pihole-url').value = dns.url;
+  }
+  if (dns.error) {
+    state.innerHTML = `<span class="badge badge-err">Not up to date</span> ${esc(dns.error)}`;
+  } else if (dns.synced) {
+    state.innerHTML = `<span class="badge badge-ok">Up to date</span> ${(dns.records || []).map(r => `<span class="font-mono">${esc(r)}</span>`).join('<br>') || 'no records (no sites)'}`;
+  } else {
+    state.innerHTML = '<span class="badge badge-muted">Kept at the next change</span>';
+  }
+}
+
+async function savePihole(e) {
+  e.preventDefault();
+  const btn = document.getElementById('btn-pihole');
+  setLoading(btn, true, 'Checking…');
+  try {
+    await apiJSON('POST', '/api/proxy/dns', {
+      url: document.getElementById('f-pihole-url').value.trim(),
+      password: document.getElementById('f-pihole-password').value,
+    });
+    document.getElementById('f-pihole-password').value = '';
+    toast('The names are in your Pi-hole.', 'ok');
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'err');
+  }
+  setLoading(btn, false);
+  loadStatus();
+}
+
+async function forgetPihole() {
+  if (!await confirm('Forget the Pi-hole', 'Its records for this NAS are taken out and no longer kept.', 'Forget')) return;
+  try {
+    await apiJSON('DELETE', '/api/proxy/dns');
+    _piholeFilled = false;
+    document.getElementById('f-pihole-url').value = '';
+    toast('Pi-hole forgotten.', 'ok');
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'err');
+  }
+  loadStatus();
 }
 
 async function toggleNames() {

@@ -426,3 +426,106 @@ def test_lego_is_installed_when_missing(lego, config):
     lego.calls.clear()
     proxy.set_acme(lego, config, dict(ACME))
     assert "lego" in [kw["package_name"] for c, a, kw in lego.calls if (c, a) == ("packages", "install")]
+
+
+class FakePihole:
+    def __init__(self, password="app-pass", hosts=None):
+        self.password = password
+        self.hosts = list(hosts or [])
+        self.sessions = 0
+
+    def __call__(self, base, method, path, body=None, sid=None):
+        import urllib.parse
+        if path == "/api/auth" and method == "POST":
+            if body["password"] != self.password:
+                return {"session": {"valid": False}}
+            self.sessions += 1
+            return {"session": {"valid": True, "sid": "sid"}}
+        if path == "/api/auth" and method == "DELETE":
+            self.sessions -= 1
+            return {}
+        assert sid == "sid"
+        if path == "/api/config/dns/hosts":
+            return {"config": {"dns": {"hosts": list(self.hosts)}}}
+        record = urllib.parse.unquote(path.rsplit("/", 1)[1])
+        if method == "PUT":
+            self.hosts.append(record)
+        elif method == "DELETE":
+            self.hosts.remove(record)
+        return {}
+
+
+@pytest.fixture
+def pihole(monkeypatch):
+    fake = FakePihole(hosts=["192.168.1.9 printer.lan"])
+    monkeypatch.setattr(proxy, "_pihole", fake)
+    monkeypatch.setattr(proxy, "lan_address", lambda: "192.168.1.200")
+    monkeypatch.setattr(proxy, "_hostname", lambda: "nas")
+    return fake
+
+
+def test_the_networks_pihole_gets_one_record_naming_every_site(engine, config, pihole):
+    names_on(engine, config)
+    proxy.add_site(engine, config, "printer", 8443, "192.168.1.50:80")
+    engine.files[f"{SITES}/app-jellyfin.caddy"] = "# freedomnas-site app jellyfin 8096 127.0.0.1:20001\n"
+    status = proxy.set_dns(engine, config, {"url": "http://192.168.1.5/", "password": "app-pass"})
+    assert status["url"] == "http://192.168.1.5" and status["error"] is None
+    assert pihole.hosts == ["192.168.1.9 printer.lan",
+                            "192.168.1.200 nas nas.home.arpa jellyfin.nas.home.arpa printer.nas.home.arpa"]
+    assert pihole.sessions == 0
+    assert config.get_module_config("proxy")["dns"] == {"url": "http://192.168.1.5", "password": "app-pass"}
+
+
+def test_a_new_site_reaches_the_pihole_at_the_next_reconcile(engine, config, pihole):
+    names_on(engine, config)
+    engine.files[f"{SITES}/app-jellyfin.caddy"] = "# freedomnas-site app jellyfin 8096 127.0.0.1:20001\n"
+    proxy.set_dns(engine, config, {"url": "http://192.168.1.5", "password": "app-pass"})
+    engine.files[f"{SITES}/app-nextcloud.caddy"] = "# freedomnas-site app nextcloud 8088 127.0.0.1:20002\n"
+    results = proxy.reconcile(engine, config.get_module_config("proxy"), "additive")
+    assert proxy._result("dns") in results
+    assert pihole.hosts[-1] == "192.168.1.200 nas nas.home.arpa jellyfin.nas.home.arpa nextcloud.nas.home.arpa"
+    assert len(pihole.hosts) == 2
+
+
+def test_names_off_take_the_record_out_and_records_of_others_stay(engine, config, pihole):
+    names_on(engine, config)
+    engine.files[f"{SITES}/app-jellyfin.caddy"] = "# freedomnas-site app jellyfin 8096 127.0.0.1:20001\n"
+    pihole.hosts.append("192.168.1.178 jellyfin.sarahs-box.home.arpa")
+    proxy.set_dns(engine, config, {"url": "http://192.168.1.5", "password": "app-pass"})
+    proxy.set_names(engine, config, False)
+    assert pihole.hosts == ["192.168.1.9 printer.lan", "192.168.1.178 jellyfin.sarahs-box.home.arpa"]
+
+
+def test_a_wrong_password_saves_nothing(engine, config, pihole):
+    names_on(engine, config)
+    with pytest.raises(proxy.ProxyError, match="refused the password"):
+        proxy.set_dns(engine, config, {"url": "http://192.168.1.5", "password": "nope"})
+    assert "dns" not in config.get_module_config("proxy")
+
+
+@pytest.mark.parametrize("settings, message", [
+    ({"url": "192.168.1.5", "password": "x"}, "http:// or https://"),
+    ({"url": "http://192.168.1.5", "password": ""}, "app password"),
+])
+def test_bad_pihole_settings_are_refused(settings, message):
+    with pytest.raises(proxy.ProxyError, match=message):
+        proxy.check_dns(settings)
+
+
+def test_forgetting_the_pihole_takes_the_records_out(engine, config, pihole):
+    names_on(engine, config)
+    engine.files[f"{SITES}/app-jellyfin.caddy"] = "# freedomnas-site app jellyfin 8096 127.0.0.1:20001\n"
+    proxy.set_dns(engine, config, {"url": "http://192.168.1.5", "password": "app-pass"})
+    proxy.remove_dns(engine, config)
+    assert pihole.hosts == ["192.168.1.9 printer.lan"]
+    assert "dns" not in config.get_module_config("proxy")
+
+
+def test_the_last_sync_is_kept_for_the_page_across_processes(engine, config, pihole):
+    names_on(engine, config)
+    proxy.set_dns(engine, config, {"url": "http://192.168.1.5", "password": "app-pass"})
+    kept = proxy.dns_status(engine, config)
+    assert kept["error"] is None and kept["synced"] and kept["records"] == ["192.168.1.200 nas nas.home.arpa"]
+    pihole.password = "changed"
+    assert proxy.reconcile(engine, config.get_module_config("proxy"), "additive")[-1].error == "Pi-hole refused the password"
+    assert proxy.dns_status(engine, config)["error"] == "Pi-hole refused the password"

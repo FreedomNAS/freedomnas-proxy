@@ -31,9 +31,19 @@ of the user's DNS provider (no port is opened to the internet), a daily cron
 job renews it, and every site also answers as https://<name>.<domain>. The
 provider's credentials stay in a root-only env file beside lego's data.
 
+The devices find the names through the network's DNS. When it is a Pi-hole
+(v6) of the network (modules.proxy.dns), FreedomNAS keeps one of its local DNS
+records per domain in step with the sites: "<address> <hostname>
+<hostname>.home.arpa <site>.<hostname>.home.arpa ..." and, with an own domain,
+"<address> <site>.<domain> ...",
+through Pi-hole's API: Pi-hole takes no wildcard from its API, so the record
+names every site. Records naming anything outside these domains are never
+touched.
+
 Configuration (modules.proxy): {"enabled": bool, "names": bool,
 "sites": {name: {"port", "upstream"}},
-"acme": {"domain", "email", "provider", "server", "env": {KEY: value}}}.
+"acme": {"domain", "email", "provider", "server", "env": {KEY: value}},
+"dns": {"url", "password"}}.
 """
 
 from __future__ import annotations
@@ -42,14 +52,22 @@ import grp
 import ipaddress
 import logging
 import os
+import json
 import re
 import socket
+import ssl
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 try:
-    from freedomnas import tls
+    from freedomnas import paths, tls
     from freedomnas.reconcile import ActionResult
 except ImportError:
+    import paths  # type: ignore[no-redef]
     import tls  # type: ignore[no-redef]
     from reconcile import ActionResult  # type: ignore[no-redef]
 
@@ -449,7 +467,7 @@ def names_status(engine, config) -> Dict[str, Any]:
     acme = _section(config).get("acme") or {}
     own = acme.get("domain") if acme and acme_ready(engine) else None
     return {"enabled": bool(_section(config).get("names")), "domain": domain(), "own_domain": own,
-            "address": lan_address()}
+            "address": lan_address(), "dns": dns_status(engine, config)}
 
 
 SERVERS = {
@@ -622,9 +640,10 @@ def remove_acme(engine, config) -> None:
     if not section.get("acme"):
         raise ProxyError("No own domain is set up")
     paths = _acme_paths(engine)
-    section.pop("acme")
+    gone = section.pop("acme")["domain"]
     engine.execute(CATEGORY, "acme_remove", cron=paths["cron"], tls_dir=paths["tls_dir"])
     reconcile(engine, section, "additive")
+    sync_dns(engine, section, also=[gone])
     config.set_module_config(MODULE_ID, section)
     for failure in reconcile_others(engine, config):
         logger.warning("After removing the own domain: %s", failure)
@@ -657,6 +676,173 @@ def status(engine, config) -> Dict[str, Any]:
         "acme": acme_status(engine, config) if is_installed else None,
         "ca_fingerprint": tls.ca_fingerprint() if tls.ca_file().exists() else None,
     }
+
+
+_DNS_URL = re.compile(r"https?://[A-Za-z0-9.-]+(?::\d{1,5})?/?")
+DNS_STATE_FILE = "proxy-dns.json"
+
+
+def _dns_state_file(engine) -> Path:
+    return paths.config_dir(engine) / DNS_STATE_FILE
+
+
+def _load_dns_state(engine) -> Dict[str, Any]:
+    try:
+        return json.loads(_dns_state_file(engine).read_text())
+    except (OSError, ValueError):
+        return {"error": None, "synced": None, "records": []}
+
+
+def _save_dns_state(engine, state: Dict[str, Any]) -> None:
+    try:
+        _dns_state_file(engine).write_text(json.dumps(state))
+    except OSError as exc:
+        logger.warning("Could not keep the DNS state: %s", exc)
+
+
+def _pihole(base: str, method: str, path: str, body: Any = None, sid: Optional[str] = None) -> Any:
+    """One call to Pi-hole's API; its own certificate is self-signed, so https is not verified."""
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    headers = {"Content-Type": "application/json", **({"X-FTL-SID": sid} if sid else {})}
+    data = json.dumps(body).encode() if body is not None else None
+    request = urllib.request.Request(base.rstrip("/") + path, method=method, data=data, headers=headers)
+    try:
+        with urllib.request.urlopen(request, context=context, timeout=15) as response:
+            text = response.read().decode()
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401 and path == "/api/auth":
+            raise ProxyError("Pi-hole refused the password")
+        try:
+            message = json.loads(exc.read().decode())["error"]["message"]
+        except Exception:
+            message = f"HTTP {exc.code}"
+        raise ProxyError(f"Pi-hole answered {exc.code}: {message}")
+    except (urllib.error.URLError, OSError) as exc:
+        raise ProxyError(f"Pi-hole at {base} cannot be reached: {getattr(exc, 'reason', exc)}")
+    return json.loads(text) if text else {}
+
+
+def _pihole_login(dns: Dict[str, Any]) -> str:
+    answer = _pihole(dns["url"], "POST", "/api/auth", {"password": dns["password"]})
+    session = answer.get("session") or {}
+    if not session.get("valid"):
+        raise ProxyError("Pi-hole refused the password")
+    return session.get("sid") or ""
+
+
+def _record_domains(section: Dict[str, Any]) -> List[str]:
+    own = (section.get("acme") or {}).get("domain")
+    return [domain()] + ([own] if own else [])
+
+
+def dns_records(engine, section: Dict[str, Any]) -> List[str]:
+    """The local DNS records the network's Pi-hole should hold for this NAS."""
+    address = lan_address()
+    if not (section.get("names") and address):
+        return []
+    names = sorted({s["name"] for s in sites(engine)})
+    local, *own = _record_domains(section)
+    records = [f"{address} {_hostname()} {local} " + " ".join(f"{n}.{local}" for n in names)]
+    records += [f"{address} " + " ".join(f"{n}.{d}" for n in names) for d in own if names]
+    return [r.rstrip() for r in records]
+
+
+def _ours(record: str, domains: List[str]) -> bool:
+    names = record.split()[1:]
+    return bool(names) and all(n == _hostname() or any(n == d or n.endswith("." + d) for d in domains)
+                               for n in names)
+
+
+def sync_dns(engine, section: Dict[str, Any], also: Optional[List[str]] = None) -> Optional[str]:
+    """
+    Bring the network's Pi-hole in step: its records for these domains (and
+    `also`, domains this NAS stopped using) become dns_records, nothing else
+    changes. Returns the error, or None.
+    """
+    dns = section.get("dns")
+    if not dns:
+        return None
+    wanted = dns_records(engine, section)
+    domains = _record_domains(section) + list(also or [])
+    sid = None
+    try:
+        sid = _pihole_login(dns)
+        current = (_pihole(dns["url"], "GET", "/api/config/dns/hosts", sid=sid).get("config") or {}) \
+            .get("dns", {}).get("hosts", [])
+        for record in current:
+            if _ours(record, domains) and record not in wanted:
+                _pihole(dns["url"], "DELETE", "/api/config/dns/hosts/" + urllib.parse.quote(record, safe=""), sid=sid)
+        for record in wanted:
+            if record not in current:
+                _pihole(dns["url"], "PUT", "/api/config/dns/hosts/" + urllib.parse.quote(record, safe=""), sid=sid)
+        _save_dns_state(engine, {"error": None, "synced": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "records": wanted})
+        return None
+    except ProxyError as exc:
+        _save_dns_state(engine, {**_load_dns_state(engine), "error": str(exc)})
+        return str(exc)
+    finally:
+        if sid:
+            try:
+                _pihole(dns["url"], "DELETE", "/api/auth", sid=sid)
+            except ProxyError:
+                pass
+
+
+def check_dns(settings: Dict[str, Any], previous: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    url = str(settings.get("url") or "").strip().rstrip("/")
+    if not _DNS_URL.fullmatch(url + "/"):
+        raise ProxyError("Pi-hole's address is http:// or https:// and its host, such as http://192.168.1.5")
+    password = str(settings.get("password") or "")
+    if not password and previous and previous.get("url") == url:
+        password = previous.get("password") or ""
+    if not password or len(password) > 256 or any(c in password for c in "\r\n"):
+        raise ProxyError("Give Pi-hole's app password (Settings → Web interface / API → App password)")
+    return {"url": url, "password": password}
+
+
+def set_dns(engine, config, settings: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep the names in the network's Pi-hole from now on, starting now."""
+    if not enabled(config):
+        raise ProxyError("Set up the reverse proxy first")
+    section = _section(config)
+    dns = check_dns(settings, section.get("dns"))
+    sid = _pihole_login(dns)
+    try:
+        _pihole(dns["url"], "GET", "/api/config/dns/hosts", sid=sid)
+    finally:
+        try:
+            _pihole(dns["url"], "DELETE", "/api/auth", sid=sid)
+        except ProxyError:
+            pass
+    section["dns"] = dns
+    error = sync_dns(engine, section)
+    if error:
+        raise ProxyError(error)
+    config.set_module_config(MODULE_ID, section)
+    return dns_status(engine, config)
+
+
+def remove_dns(engine, config) -> None:
+    """Take this NAS's records out of the network's Pi-hole and stop keeping them."""
+    section = _section(config)
+    if not section.get("dns"):
+        raise ProxyError("No Pi-hole of the network is set")
+    cleared = {**section, "names": False}
+    error = sync_dns(engine, cleared)
+    section.pop("dns")
+    config.set_module_config(MODULE_ID, section)
+    _save_dns_state(engine, {"error": None, "synced": None, "records": []})
+    if error:
+        raise ProxyError(f"Forgotten, but its records could not be taken out: {error}")
+
+
+def dns_status(engine, config) -> Optional[Dict[str, Any]]:
+    dns = _section(config).get("dns")
+    if not dns:
+        return None
+    return {"url": dns["url"], **_load_dns_state(engine)}
 
 
 def _result(action: str, error: Optional[str] = None) -> ActionResult:
@@ -707,4 +893,11 @@ def reconcile(engine, desired: Dict[str, Any], mode: str = "declarative") -> Lis
             results.append(_result("config"))
     except Exception as exc:
         results.append(_result("config", str(exc)))
+    if desired.get("dns"):
+        previous = list(_load_dns_state(engine).get("records") or [])
+        error = sync_dns(engine, desired)
+        if error:
+            results.append(_result("dns", error))
+        elif _load_dns_state(engine).get("records") != previous:
+            results.append(_result("dns"))
     return results

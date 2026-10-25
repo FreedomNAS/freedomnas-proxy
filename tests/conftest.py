@@ -46,6 +46,7 @@ class FakeEngine:
         section["tls_dir"] = str(tmp / "caddy-tls")
         section["group"] = grp.getgrgid(os.getgid()).gr_name
         self.section = section
+        self.profile = {"paths": {"config_dir": str(tmp)}}
         self.files = {}
         self.calls = []
         self.failing = set()

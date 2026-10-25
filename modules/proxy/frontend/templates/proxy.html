@@ -55,6 +55,27 @@
       <span class="form-hint" style="margin-left:8px">Uses ports 443 and 80 of the NAS.</span>
     </div>
     <p class="form-hint" id="names-dns" hidden style="margin-top:12px"></p>
+    <div class="advanced-only" id="pihole-box" hidden style="margin-top:14px;border-top:1px solid var(--card-border);padding-top:12px">
+      <div class="text-sm" style="font-weight:600;margin-bottom:6px">Pi-hole of your network</div>
+      <p class="text-muted text-sm" style="margin:0 0 10px">
+        If your devices use a Pi-hole of your network as DNS server, FreedomNAS can keep these names in it by itself
+        (its Local DNS Records, one per domain naming every site), up to date when sites, names or the NAS's address
+        change. Pi-hole 6: create an app password in its Settings → Web interface / API.
+      </p>
+      <p class="form-hint" id="pihole-state" hidden></p>
+      <form id="form-pihole" class="d-flex gap-3" style="flex-wrap:wrap;align-items:flex-end">
+        <div class="form-group" style="margin:0">
+          <label for="f-pihole-url">Pi-hole address</label>
+          <input id="f-pihole-url" class="input" required placeholder="http://192.168.1.5" style="max-width:220px">
+        </div>
+        <div class="form-group" style="margin:0">
+          <label for="f-pihole-password">App password</label>
+          <input id="f-pihole-password" class="input" type="password" autocomplete="off" style="max-width:220px">
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm" id="btn-pihole">Keep the names there</button>
+        <button type="button" class="btn btn-danger btn-sm" id="btn-pihole-forget" hidden>Forget</button>
+      </form>
+    </div>
   </div>
 </div>
 
