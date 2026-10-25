@@ -529,3 +529,9 @@ def test_the_last_sync_is_kept_for_the_page_across_processes(engine, config, pih
     pihole.password = "changed"
     assert proxy.reconcile(engine, config.get_module_config("proxy"), "additive")[-1].error == "Pi-hole refused the password"
     assert proxy.dns_status(engine, config)["error"] == "Pi-hole refused the password"
+
+
+def test_plain_http_on_an_https_port_is_sent_to_https(engine, config):
+    set_up(engine, config)
+    main = engine.files["/etc/caddy/Caddyfile"]
+    assert "listener_wrappers {\n\t\t\thttp_redirect\n\t\t\ttls\n\t\t}" in main
