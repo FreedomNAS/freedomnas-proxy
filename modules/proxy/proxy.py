@@ -725,10 +725,18 @@ def _pihole(base: str, method: str, path: str, body: Any = None, sid: Optional[s
 
 
 def _pihole_login(dns: Dict[str, Any]) -> str:
-    answer = _pihole(dns["url"], "POST", "/api/auth", {"password": dns["password"]})
+    """A session id, or "" for a Pi-hole that has no password and asks for none."""
+    if dns.get("password"):
+        answer = _pihole(dns["url"], "POST", "/api/auth", {"password": dns["password"]})
+    else:
+        try:
+            answer = _pihole(dns["url"], "GET", "/api/auth")
+        except ProxyError:
+            raise ProxyError("This Pi-hole has a password: give its app password")
     session = answer.get("session") or {}
     if not session.get("valid"):
-        raise ProxyError("Pi-hole refused the password")
+        raise ProxyError("Pi-hole refused the password" if dns.get("password")
+                         else "This Pi-hole has a password: give its app password")
     return session.get("sid") or ""
 
 
@@ -797,8 +805,8 @@ def check_dns(settings: Dict[str, Any], previous: Optional[Dict[str, Any]] = Non
     password = str(settings.get("password") or "")
     if not password and previous and previous.get("url") == url:
         password = previous.get("password") or ""
-    if not password or len(password) > 256 or any(c in password for c in "\r\n"):
-        raise ProxyError("Give Pi-hole's app password (Settings → Web interface / API → App password)")
+    if len(password) > 256 or any(c in password for c in "\r\n"):
+        raise ProxyError("Pi-hole's app password is one line of at most 256 characters")
     return {"url": url, "password": password}
 
 
@@ -812,10 +820,11 @@ def set_dns(engine, config, settings: Dict[str, Any]) -> Dict[str, Any]:
     try:
         _pihole(dns["url"], "GET", "/api/config/dns/hosts", sid=sid)
     finally:
-        try:
-            _pihole(dns["url"], "DELETE", "/api/auth", sid=sid)
-        except ProxyError:
-            pass
+        if sid:
+            try:
+                _pihole(dns["url"], "DELETE", "/api/auth", sid=sid)
+            except ProxyError:
+                pass
     section["dns"] = dns
     error = sync_dns(engine, section)
     if error:

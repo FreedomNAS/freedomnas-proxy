@@ -441,10 +441,14 @@ class FakePihole:
                 return {"session": {"valid": False}}
             self.sessions += 1
             return {"session": {"valid": True, "sid": "sid"}}
+        if path == "/api/auth" and method == "GET":
+            if self.password:
+                raise proxy.ProxyError("Pi-hole answered 401: Unauthorized")
+            return {"session": {"valid": True, "sid": None}}
         if path == "/api/auth" and method == "DELETE":
             self.sessions -= 1
             return {}
-        assert sid == "sid"
+        assert sid == ("sid" if self.password else "")
         if path == "/api/config/dns/hosts":
             return {"config": {"dns": {"hosts": list(self.hosts)}}}
         record = urllib.parse.unquote(path.rsplit("/", 1)[1])
@@ -505,11 +509,26 @@ def test_a_wrong_password_saves_nothing(engine, config, pihole):
 
 @pytest.mark.parametrize("settings, message", [
     ({"url": "192.168.1.5", "password": "x"}, "http:// or https://"),
-    ({"url": "http://192.168.1.5", "password": ""}, "app password"),
+    ({"url": "http://192.168.1.5", "password": "a\nb"}, "one line"),
 ])
 def test_bad_pihole_settings_are_refused(settings, message):
     with pytest.raises(proxy.ProxyError, match=message):
         proxy.check_dns(settings)
+
+
+def test_a_pihole_without_password_needs_none(engine, config, pihole):
+    pihole.password = ""
+    names_on(engine, config)
+    status = proxy.set_dns(engine, config, {"url": "http://192.168.1.5", "password": ""})
+    assert status["error"] is None
+    assert pihole.hosts[-1] == "192.168.1.200 nas nas.home.arpa"
+    assert pihole.sessions == 0
+
+
+def test_an_empty_password_for_a_pihole_that_has_one_says_so(engine, config, pihole):
+    names_on(engine, config)
+    with pytest.raises(proxy.ProxyError, match="has a password"):
+        proxy.set_dns(engine, config, {"url": "http://192.168.1.5", "password": ""})
 
 
 def test_forgetting_the_pihole_takes_the_records_out(engine, config, pihole):

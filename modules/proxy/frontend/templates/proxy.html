@@ -60,7 +60,8 @@
       <p class="text-muted text-sm" style="margin:0 0 10px">
         If your devices use a Pi-hole of your network as DNS server, FreedomNAS can keep these names in it by itself
         (its Local DNS Records, one per domain naming every site), up to date when sites, names or the NAS's address
-        change. Pi-hole 6: create an app password in its Settings → Web interface / API.
+        change. Pi-hole 6: create an app password in its Settings → Web interface / API; a Pi-hole with no
+        password needs none.
       </p>
       <p class="form-hint" id="pihole-state" hidden></p>
       <form id="form-pihole" class="d-flex gap-3" style="flex-wrap:wrap;align-items:flex-end">
@@ -69,7 +70,7 @@
           <input id="f-pihole-url" class="input" required placeholder="http://192.168.1.5" style="max-width:220px">
         </div>
         <div class="form-group" style="margin:0">
-          <label for="f-pihole-password">App password</label>
+          <label for="f-pihole-password">App password (empty if it has no password)</label>
           <input id="f-pihole-password" class="input" type="password" autocomplete="off" style="max-width:220px">
         </div>
         <button type="submit" class="btn btn-primary btn-sm" id="btn-pihole">Keep the names there</button>
