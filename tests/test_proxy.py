@@ -164,11 +164,28 @@ def test_reconcile_additive_keeps_them(engine, config):
     assert f"{SITES}/site-old.caddy" in engine.files
 
 
-def test_reconcile_without_caddy_says_so(engine, config):
+def test_reconcile_without_caddy_installs_it_and_says_so_when_that_fails(engine, config):
     set_up(engine, config)
     engine.installed = False
     results = proxy.reconcile(engine, config.get_module_config("proxy"))
-    assert results[0].target_state == "failed" and "not installed" in results[0].error
+    assert ("packages", "install") in [(c, a) for c, a, _ in engine.calls]
+    assert results[-1].target_state == "failed" and "still missing" in results[-1].error
+
+
+def test_reconcile_on_a_system_without_caddy_installs_it_and_goes_on(engine, config):
+    set_up(engine, config)
+    engine.installed = False
+    original = engine.execute
+
+    def execute(category, action, **kw):
+        if (category, action) == ("packages", "install"):
+            engine.installed = True
+        return original(category, action, **kw)
+
+    engine.execute = execute
+    results = proxy.reconcile(engine, config.get_module_config("proxy"))
+    assert results[0].action == "proxy.install" and results[0].target_state == "applied"
+    assert all(r.target_state != "failed" for r in results)
 
 
 def test_nothing_happens_before_setup(engine, config):

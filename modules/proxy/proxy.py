@@ -860,12 +860,22 @@ def _result(action: str, error: Optional[str] = None) -> ActionResult:
 
 
 def reconcile(engine, desired: Dict[str, Any], mode: str = "declarative") -> List[ActionResult]:
-    """Caddy's configuration, the certificate and the sites added by hand back as config.yaml says."""
+    """
+    Caddy's configuration, the certificate and the sites added by hand back
+    as config.yaml says. A system without Caddy (a fresh install restored
+    from its pool, another edition) gets it installed first, as Set up does.
+    """
     if not desired.get("enabled"):
         return []
-    if not installed(engine):
-        return [_result("installed", "Caddy is not installed: install it from the Reverse proxy page")]
     results: List[ActionResult] = []
+    if not installed(engine):
+        try:
+            install(engine)
+            results.append(_result("install"))
+        except Exception as exc:
+            return [_result("installed", f"Caddy could not be installed: {exc}")]
+        if not installed(engine):
+            return results + [_result("installed", "Caddy is still missing after its installation")]
     acme = desired.get("acme") if desired.get("names") else None
     if acme:
         try:
