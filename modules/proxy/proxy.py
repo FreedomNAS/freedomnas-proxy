@@ -106,6 +106,7 @@ def installed(engine) -> bool:
 
 
 def install(engine) -> None:
+    engine.execute("packages", "update_cache", timeout=3600, check=False)
     if value(engine, "install_prepare"):
         engine.execute(CATEGORY, "install_prepare")
     init = (value(engine, "init_packages", {}) or {}).get(getattr(engine, "init_system", ""), [])
