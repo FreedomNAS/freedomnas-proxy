@@ -68,3 +68,6 @@ class ProxyModule(FreedomNASModule):
 
     def reconcile(self, desired: dict, mode: str = "declarative") -> List:
         return proxy.reconcile(self._engine, desired, mode)
+
+    def prepare(self, desired: dict) -> List:
+        return proxy.ensure_installed(self._engine, desired)

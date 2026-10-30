@@ -188,6 +188,25 @@ def test_reconcile_on_a_system_without_caddy_installs_it_and_goes_on(engine, con
     assert all(r.target_state != "failed" for r in results)
 
 
+def test_an_installer_chroot_gets_caddy_and_nothing_is_started(engine, config):
+    set_up(engine, config)
+    engine.installed = False
+    engine.calls.clear()
+    original = engine.execute
+
+    def execute(category, action, **kw):
+        if (category, action) == ("packages", "install"):
+            engine.installed = True
+        return original(category, action, **kw)
+
+    engine.execute = execute
+    results = proxy.ensure_installed(engine, config.get_module_config("proxy"))
+    assert [(r.action, r.target_state) for r in results] == [("proxy.install", "applied")]
+    assert not [c for c, _, _ in engine.calls if c == "services"]
+    assert proxy.ensure_installed(engine, config.get_module_config("proxy")) == []
+    assert proxy.ensure_installed(engine, {}) == []
+
+
 def test_nothing_happens_before_setup(engine, config):
     assert proxy.reconcile(engine, {}) == []
     with pytest.raises(proxy.ProxyError, match="Set up"):

@@ -860,6 +860,22 @@ def _result(action: str, error: Optional[str] = None) -> ActionResult:
                         target_state="failed" if error else "applied", error=error)
 
 
+def ensure_installed(engine, desired: Dict[str, Any]) -> List[ActionResult]:
+    """
+    Caddy installed when the configuration has the proxy set up: at the
+    reconcile, and in an installer's chroot before the first boot.
+    """
+    if not desired.get("enabled") or installed(engine):
+        return []
+    try:
+        install(engine)
+    except Exception as exc:
+        return [_result("installed", f"Caddy could not be installed: {exc}")]
+    if not installed(engine):
+        return [_result("install"), _result("installed", "Caddy is still missing after its installation")]
+    return [_result("install")]
+
+
 def reconcile(engine, desired: Dict[str, Any], mode: str = "declarative") -> List[ActionResult]:
     """
     Caddy's configuration, the certificate and the sites added by hand back
@@ -868,15 +884,9 @@ def reconcile(engine, desired: Dict[str, Any], mode: str = "declarative") -> Lis
     """
     if not desired.get("enabled"):
         return []
-    results: List[ActionResult] = []
-    if not installed(engine):
-        try:
-            install(engine)
-            results.append(_result("install"))
-        except Exception as exc:
-            return [_result("installed", f"Caddy could not be installed: {exc}")]
-        if not installed(engine):
-            return results + [_result("installed", "Caddy is still missing after its installation")]
+    results = ensure_installed(engine, desired)
+    if any(r.target_state == "failed" for r in results):
+        return results
     acme = desired.get("acme") if desired.get("names") else None
     if acme:
         try:
