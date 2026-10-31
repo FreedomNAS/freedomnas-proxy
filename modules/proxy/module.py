@@ -71,3 +71,6 @@ class ProxyModule(FreedomNASModule):
 
     def prepare(self, desired: dict) -> List:
         return proxy.ensure_installed(self._engine, desired)
+
+    def links(self) -> List:
+        return proxy.links(self._engine, self._config)

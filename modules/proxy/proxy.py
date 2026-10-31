@@ -464,6 +464,24 @@ def lan_address() -> Optional[str]:
         return None
 
 
+def links(engine, config) -> List[Dict[str, Any]]:
+    """Every site, for every account of the NAS: by its name when names are on, else on its port."""
+    if not enabled(config) or not installed(engine):
+        return []
+    section = _section(config)
+    own = (section.get("acme") or {}).get("domain") if section.get("acme") and acme_ready(engine) else None
+    local = domain() if section.get("names") else None
+    found = []
+    for site in sites(engine):
+        link = {"name": site["name"]}
+        if own or local:
+            link["url"] = f"https://{site['name']}.{own or local}/"
+        else:
+            link.update(scheme="https", port=site["port"])
+        found.append(link)
+    return found
+
+
 def names_status(engine, config) -> Dict[str, Any]:
     acme = _section(config).get("acme") or {}
     own = acme.get("domain") if acme and acme_ready(engine) else None

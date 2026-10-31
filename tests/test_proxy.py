@@ -590,3 +590,13 @@ def test_plain_http_on_an_https_port_is_sent_to_https(engine, config):
     set_up(engine, config)
     main = engine.files["/etc/caddy/Caddyfile"]
     assert "listener_wrappers {\n\t\t\thttp_redirect\n\t\t\ttls\n\t\t}" in main
+
+
+def test_the_account_page_gets_every_site_by_port_or_by_name(engine, config, monkeypatch):
+    monkeypatch.setattr(proxy, "_hostname", lambda: "nas")
+    assert proxy.links(engine, config) == []
+    set_up(engine, config)
+    proxy.add_site(engine, config, "printer", 8443, "192.168.1.50:80")
+    assert proxy.links(engine, config) == [{"name": "printer", "scheme": "https", "port": 8443}]
+    proxy.set_names(engine, config, True)
+    assert proxy.links(engine, config) == [{"name": "printer", "url": "https://printer.nas.home.arpa/"}]
