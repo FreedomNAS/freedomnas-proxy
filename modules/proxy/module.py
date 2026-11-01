@@ -15,12 +15,8 @@ from pathlib import Path
 from typing import List, Tuple
 
 try:
-    from freedomnas.engine import FreedomNASEngine
-    from freedomnas.config import ConfigurationManager
     from freedomnas.orchestrator import FreedomNASModule
 except ImportError:
-    from engine import FreedomNASEngine  # type: ignore[no-redef]
-    from config import ConfigurationManager  # type: ignore[no-redef]
     from orchestrator import FreedomNASModule  # type: ignore[no-redef]
 
 logger = logging.getLogger("FreedomNAS.Module.Proxy")
