@@ -331,8 +331,11 @@ def reconcile_others(engine, config) -> List[str]:
         from freedomnas.module_loader import ModuleLoader
     except ImportError:
         from module_loader import ModuleLoader  # type: ignore[no-redef]
-    failures = []
-    for manifest, module in ModuleLoader(engine, config).instances():
+    loader = ModuleLoader(engine, config)
+    pairs = loader.instances()
+    failures = [f"modules.{module_id}: not loaded: {reason}"
+                for module_id, reason in sorted(loader.failed.items()) if module_id != MODULE_ID]
+    for manifest, module in pairs:
         module_id = manifest.get("id", module.name)
         if module_id == MODULE_ID:
             continue

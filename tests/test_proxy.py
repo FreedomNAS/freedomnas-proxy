@@ -600,3 +600,19 @@ def test_the_account_page_gets_every_site_by_port_or_by_name(engine, config, mon
     assert proxy.links(engine, config) == [{"name": "printer", "scheme": "https", "port": 8443}]
     proxy.set_names(engine, config, True)
     assert proxy.links(engine, config) == [{"name": "printer", "url": "https://printer.nas.home.arpa/"}]
+
+
+def test_the_others_that_did_not_load_are_reported(engine, config, monkeypatch):
+    import freedomnas.module_loader as module_loader
+
+    class Loader:
+        def __init__(self, engine, config):
+            self.failed = {"containers": "SyntaxError in containers/module.py, line 3: invalid syntax",
+                           "proxy": "not this one"}
+
+        def instances(self):
+            return []
+
+    monkeypatch.setattr(module_loader, "ModuleLoader", Loader)
+    assert proxy.reconcile_others(engine, config) == [
+        "modules.containers: not loaded: SyntaxError in containers/module.py, line 3: invalid syntax"]
