@@ -4,9 +4,9 @@ Priority: optional
 Maintainer: FreedomNAS Team <dev@freedomnas.io>
 Standards-Version: 4.6.2
 Build-Depends: debhelper-compat (= 13)
-Homepage: https://codeberg.org/FreedomNAS/freedomnas-proxy
-Vcs-Browser: https://codeberg.org/FreedomNAS/freedomnas-proxy
-Vcs-Git: https://codeberg.org/FreedomNAS/freedomnas-proxy.git
+Homepage: https://github.com/FreedomNAS/freedomnas-proxy
+Vcs-Browser: https://github.com/FreedomNAS/freedomnas-proxy
+Vcs-Git: https://github.com/FreedomNAS/freedomnas-proxy.git
 
 Package: freedomnas-module-proxy
 Architecture: all

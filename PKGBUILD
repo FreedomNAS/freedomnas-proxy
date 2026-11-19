@@ -5,10 +5,10 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc="Reverse proxy for FreedomNAS: HTTPS for every web app"
 arch=('any')
-url="https://codeberg.org/FreedomNAS/freedomnas-proxy"
+url="https://github.com/FreedomNAS/freedomnas-proxy"
 license=('MPL-2.0')
 depends=('freedomnas-core>0.9.12' 'freedomnas-webui>0.9.12' 'caddy' 'lego')
-source=("git+https://codeberg.org/FreedomNAS/freedomnas-proxy.git#tag=v${pkgver}")
+source=("git+https://github.com/FreedomNAS/freedomnas-proxy.git#tag=v${pkgver}")
 sha256sums=('SKIP')
 
 _install() {
